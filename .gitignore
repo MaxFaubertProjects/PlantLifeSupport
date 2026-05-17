@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Runtime data (sqlite db + captured photos)
+data/
+*.db
+*.sqlite3
+
+# Secrets / local config
+.env
+
+# OS / editor
+.DS_Store
+*.log
