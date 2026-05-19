@@ -1,0 +1,72 @@
+# Plant Life Support — configuration
+# All tunable parameters live here. The code reads this at startup.
+
+# ── Runtime mode ─────────────────────────────────────────────────────────────
+# "simulation" : synthetic sensors + logged actuators (Mac dev / CI)
+# "hardware"   : real Pi drivers (MCP3008 soil ADC, DS18B20, gpiozero, picamera2)
+mode: simulation
+
+# ── Schedule ─────────────────────────────────────────────────────────────────
+loop_interval_minutes: 60   # how often the decision pipeline runs
+
+# ── Plant profile (injected into every AI prompt) ─────────────────────────────
+plant:
+  name: "Monstera deliciosa"
+  species_notes: >
+    Tropical foliage plant. Prefers bright indirect light and well-draining soil.
+    Allow the top 2–3 cm of soil to dry between waterings. Sensitive to overwatering
+    (root rot) and prolonged drought. Optimal temperature 18–27 °C.
+
+# ── Soil moisture ─────────────────────────────────────────────────────────────
+# MCP3008 returns 0–1023 (10-bit). Higher value = drier soil on a resistive sensor.
+soil:
+  # Thresholds for the rule-based fallback (rules.py)
+  dry_threshold: 700        # above this → consider watering
+  wet_threshold: 400        # below this → soil is moist, skip watering
+  # Simulation: realistic range for a potted monstera
+  sim_initial: 600
+  sim_dry_rate: 10          # ADC counts lost per hour (soil drying)
+  sim_wet_effect: -250      # ADC counts gained per watering pulse
+
+# ── Temperature ───────────────────────────────────────────────────────────────
+temperature:
+  # Thresholds for safety / fallback logic
+  too_cold_celsius: 15.0    # below this → always turn light on for warmth
+  too_hot_celsius: 32.0     # above this → never water (heat stress watering risk)
+  # Simulation
+  sim_initial_celsius: 22.0
+  sim_variance_celsius: 1.5  # ± random walk per cycle
+
+# ── Watering safety limits ────────────────────────────────────────────────────
+watering:
+  max_pulse_seconds: 8          # hard cap on a single watering pulse
+  min_interval_minutes: 90      # minimum time between two waterings
+  # If soil ADC is below wet_threshold, AI request to water is overridden OFF
+  # regardless of what the AI says.
+
+# ── Grow light limits ─────────────────────────────────────────────────────────
+light:
+  max_on_hours_per_day: 16      # safety cap
+
+# ── GPIO (hardware mode only) ────────────────────────────────────────────────
+# Fill these in from the relay board's silkscreen BEFORE running in hardware mode.
+gpio:
+  valve_gpio: 17       # BCM pin driving Relay 1 (solenoid valve)
+  light_gpio: 27       # BCM pin driving Relay 2 (grow light)
+
+# ── AI models (Ollama) ────────────────────────────────────────────────────────
+ai:
+  ollama_base_url: "http://localhost:11434"
+  vision_model: "moondream"        # VLM: image → plant description text
+  reasoning_model: "llama3.2:3b"   # LLM: context → structured Decision JSON
+  timeout_seconds: 120             # per-request timeout before fallback kicks in
+
+# ── Storage ──────────────────────────────────────────────────────────────────
+storage:
+  db_path: "data/plant.db"
+  photo_dir: "data/photos"
+
+# ── Web dashboard ─────────────────────────────────────────────────────────────
+web:
+  host: "0.0.0.0"
+  port: 8080

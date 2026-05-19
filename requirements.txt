@@ -1,0 +1,25 @@
+# ── Core ─────────────────────────────────────────────────────────────────────
+pyyaml>=6.0
+pydantic>=2.7
+
+# ── AI / Ollama ───────────────────────────────────────────────────────────────
+ollama>=0.3          # official Python client for Ollama
+
+# ── Web dashboard ─────────────────────────────────────────────────────────────
+fastapi>=0.111
+uvicorn[standard]>=0.29
+
+# ── Storage ───────────────────────────────────────────────────────────────────
+# SQLite ships with Python — no extra package needed.
+
+# ── Hardware (Pi only — installed manually on the Pi, not needed on Mac) ─────
+# spidev>=3.6          # SPI access for MCP3008
+# RPi.GPIO>=0.7        # GPIO control (gpiozero wraps this)
+# gpiozero>=2.0        # relay / actuator control
+# picamera2>=0.3       # camera capture
+# w1thermsensor>=2.3   # DS18B20 1-wire temperature probe
+
+# ── Dev / test ────────────────────────────────────────────────────────────────
+pytest>=8.0
+pytest-asyncio>=0.23
+httpx>=0.27          # async test client for FastAPI
