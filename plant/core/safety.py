@@ -123,17 +123,16 @@ def _last_watering_ts(recent_cycles: list) -> datetime | None:
 
 
 def _light_on_hours_today(recent_cycles: list) -> float:
-    """Estimate how many hours the light was on today."""
-    now = datetime.now(timezone.utc)
-    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    """Estimate how many hours the light was on in the last 24 hours."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     hours = 0.0
     for c in recent_cycles:
         try:
             ts = datetime.fromisoformat(c.ts)
         except ValueError:
             continue
-        if ts < midnight:
-            break   # cycles are newest-first; stop at yesterday
+        if ts < cutoff:
+            break   # cycles are newest-first; stop outside the 24h window
         if c.final_light_on:
             hours += 1.0   # each cycle ≈ 1 hour of potential on-time
     return hours
