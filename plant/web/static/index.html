@@ -191,6 +191,10 @@
       border-radius: 14px; padding: 14px 14px 12px;
       display: flex; flex-direction: column; gap: 6px;
     }
+    .tile.running {
+      animation: cycle-pulse 1.6s ease-in-out infinite;
+      border-color: var(--accent);
+    }
     .big {
       font-family: "Newsreader", serif; font-size: 32px; line-height: 1;
       font-weight: 400; letter-spacing: -0.01em;
@@ -252,11 +256,16 @@
     }
     .reasoning-divider { flex: 1; height: 1px; background: var(--line); }
     .reasoning-body {
-      flex: 1; overflow: hidden;
-      display: flex; flex-direction: column; gap: 8px;
+      flex: 1; overflow-y: auto; overflow-x: hidden;
+      display: flex; flex-direction: column; gap: 10px;
+      padding-right: 4px;
+    }
+    .reasoning-body::-webkit-scrollbar { width: 6px; }
+    .reasoning-body::-webkit-scrollbar-thumb {
+      background: var(--line); border-radius: 3px;
     }
     .r-row {
-      display: flex; gap: 10px; font-size: 12px; line-height: 1.4;
+      display: flex; gap: 10px; font-size: 12px; line-height: 1.45;
     }
     .r-time {
       flex-shrink: 0; font-family: "Newsreader", serif;
@@ -264,8 +273,7 @@
     }
     .r-text {
       flex: 1; color: var(--ink); min-width: 0;
-      display: -webkit-box; -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical; overflow: hidden;
+      word-wrap: break-word; overflow-wrap: break-word;
     }
     .r-fallback {
       color: var(--warn); font-size: 9px; font-weight: 600;
@@ -991,15 +999,18 @@ function renderNextCycleTile() {
   const big = document.getElementById('tile-next-big');
   const bar = document.getElementById('tile-next-bar');
   const sub = document.getElementById('tile-next-sub');
+  const tile = big.closest('.tile');
   const stage = (window.__lastStatus && window.__lastStatus.cycle_state.stage) || 'idle';
   const running = stage !== 'idle' && stage !== 'starting';
+
+  if (tile) tile.classList.toggle('running', running);
 
   if (running) {
     big.innerHTML = `Now<span class="unit"> running</span>`;
     big.style.color = T.accent;
     bar.setAttribute('width', '120');
     bar.setAttribute('fill', T.accent);
-    sub.textContent = `Cycle in progress`;
+    sub.textContent = stage + '…';
     return;
   }
   const eta = computeEta();
