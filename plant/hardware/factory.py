@@ -39,6 +39,21 @@ def get_hardware(cfg: dict) -> Hardware:
         log.info("Hardware mode: REAL (Pi drivers)")
         return build_real_hardware(cfg)
 
+    if mode == "hybrid":
+        from plant.hardware.mock import (
+            MockSoilSensor, MockValveActuator, MockLightActuator,
+        )
+        from plant.hardware.real import RealCamera, RealTemperatureSensor
+        log.info("Hardware mode: HYBRID (real camera+temp, mock soil/valve/light)")
+        soil = MockSoilSensor(cfg)
+        return Hardware(
+            soil=soil,
+            temperature=RealTemperatureSensor(),
+            camera=RealCamera(),
+            valve=MockValveActuator(soil_sensor=soil),
+            light=MockLightActuator(),
+        )
+
     raise ValueError(
-        f"Unknown mode {mode!r} in config.yaml — must be 'simulation' or 'hardware'."
+        f"Unknown mode {mode!r} in config.yaml — must be 'simulation', 'hybrid', or 'hardware'."
     )

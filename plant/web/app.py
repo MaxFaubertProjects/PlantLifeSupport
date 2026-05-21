@@ -15,8 +15,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
+import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +31,17 @@ class WaterRequest(BaseModel):
 
 class LightRequest(BaseModel):
     on: bool
+
+
+class PlantConfigSection(BaseModel):
+    name: Optional[str] = None
+    species: Optional[str] = None
+    species_notes: Optional[str] = None
+
+
+class ConfigUpdateRequest(BaseModel):
+    loop_interval_minutes: Optional[int] = None
+    plant: Optional[PlantConfigSection] = None
 
 log = logging.getLogger(__name__)
 
@@ -70,15 +82,32 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     @app.get("/api/status")
     async def api_status() -> dict[str, Any]:
         """Return the latest cycle data and current hardware state."""
+        from datetime import datetime, timezone
         db = control_loop.db
         latest = db.latest_cycle()
         light_on = hardware.light.is_on()
+
+        cycle_state = dict(control_loop.cycle_state)
+        nxt = cycle_state.get("next_cycle_at")
+        if nxt:
+            eta = (datetime.fromisoformat(nxt) - datetime.now(timezone.utc)).total_seconds()
+            cycle_state["next_cycle_eta_sec"] = max(0, int(eta))
+        else:
+            cycle_state["next_cycle_eta_sec"] = None
+
+        plant_cfg = cfg.get("plant", {})
+        plant = {
+            "name": plant_cfg.get("name", "Phil"),
+            "species": plant_cfg.get("species", plant_cfg.get("name", "Plant")),
+        }
 
         return {
             "mode": cfg.get("mode", "simulation"),
             "cycle_count": db.cycle_count(),
             "light_on": light_on,
             "latest": _cycle_to_dict(latest) if latest else None,
+            "cycle_state": cycle_state,
+            "plant": plant,
         }
 
     # ── API: cycles (for charts + reasoning log) ──────────────────────────────
@@ -117,9 +146,54 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     @app.post("/api/cycle")
     async def api_cycle():
         """Run the full decision pipeline immediately (async, non-blocking)."""
+        if control_loop.cycle_state.get("stage") != "idle":
+            log.info("Manual cycle trigger ignored — already running")
+            raise HTTPException(status_code=409, detail="cycle already running")
         log.info("Manual cycle trigger via API")
         asyncio.get_event_loop().run_in_executor(None, control_loop.run_cycle)
         return {"status": "cycle started"}
+
+    # ── API: config read/write ────────────────────────────────────────────────
+
+    @app.get("/api/config")
+    async def get_config() -> dict[str, Any]:
+        """Return the current editable configuration."""
+        plant = cfg.get("plant", {})
+        return {
+            "loop_interval_minutes": cfg.get("loop_interval_minutes", 60),
+            "plant": {
+                "name": plant.get("name", ""),
+                "species": plant.get("species", ""),
+                "species_notes": plant.get("species_notes", ""),
+            },
+        }
+
+    @app.post("/api/config")
+    async def post_config(req: ConfigUpdateRequest) -> dict[str, Any]:
+        """Update editable config values in memory and write back to disk."""
+        if req.loop_interval_minutes is not None:
+            cfg["loop_interval_minutes"] = req.loop_interval_minutes
+            control_loop._interval = req.loop_interval_minutes * 60
+            log.info("Config: loop_interval_minutes → %d", req.loop_interval_minutes)
+
+        if req.plant is not None:
+            plant = cfg.setdefault("plant", {})
+            if req.plant.name is not None:
+                plant["name"] = req.plant.name
+            if req.plant.species is not None:
+                plant["species"] = req.plant.species
+            if req.plant.species_notes is not None:
+                plant["species_notes"] = req.plant.species_notes
+            log.info("Config: plant updated")
+
+        config_path = cfg.get("_config_path")
+        if config_path:
+            to_write = {k: v for k, v in cfg.items() if not k.startswith("_")}
+            with open(config_path, "w") as f:
+                yaml.dump(to_write, f, default_flow_style=False, allow_unicode=True,
+                          sort_keys=False)
+
+        return {"ok": True}
 
     return app
 

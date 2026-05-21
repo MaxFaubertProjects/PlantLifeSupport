@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from plant.hardware.interfaces import Hardware
@@ -34,6 +35,23 @@ class ControlLoop:
         self._db: Database = open_db(cfg)
         self._vision = VisionClient(cfg)
         self._reasoning = ReasoningClient(cfg)
+        self.cycle_state: dict = {
+            "stage": "idle",
+            "stage_started_at": None,
+            "cycle_started_at": None,
+            # First-cycle estimate; the loop refines this after each cycle completes.
+            "next_cycle_at": (
+                datetime.now(timezone.utc) + timedelta(seconds=self._interval)
+            ).isoformat(),
+        }
+        self._cycle_lock = threading.Lock()
+
+    def _set_stage(self, stage: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self.cycle_state["stage"] = stage
+        self.cycle_state["stage_started_at"] = now
+        if stage == "starting":
+            self.cycle_state["cycle_started_at"] = now
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -48,35 +66,55 @@ class ControlLoop:
                 await asyncio.get_event_loop().run_in_executor(None, self._run_cycle)
             except Exception:
                 log.exception("ControlLoop: unhandled error in cycle — will retry next interval")
+            self.cycle_state["next_cycle_at"] = (
+                datetime.now(timezone.utc) + timedelta(seconds=self._interval)
+            ).isoformat()
             await asyncio.sleep(self._interval)
 
-    def run_cycle(self) -> int:
+    def run_cycle(self) -> int | None:
         """Run one cycle synchronously and return the DB cycle id.
 
+        Returns None if a cycle is already in progress (no overlap allowed).
         Useful for tests and manual triggers from the web API.
         """
         return self._run_cycle()
 
     # ── Pipeline ──────────────────────────────────────────────────────────────
 
-    def _run_cycle(self) -> int:
-        log.info("── Cycle start ─────────────────────────────────────────────")
+    def _run_cycle(self) -> int | None:
+        if not self._cycle_lock.acquire(blocking=False):
+            log.warning("ControlLoop: cycle already in progress — skipping new trigger")
+            return None
+        try:
+            log.info("── Cycle start ─────────────────────────────────────────────")
+            self._set_stage("starting")
+            try:
+                return self._run_cycle_inner()
+            finally:
+                self._set_stage("idle")
+        finally:
+            self._cycle_lock.release()
 
+    def _run_cycle_inner(self) -> int:
         # 1. Sense
+        self._set_stage("sensing")
         soil = self.hardware.soil.read()
         temp = self.hardware.temperature.read()
         log.info("Sense: soil=%d ADC (%.1f%%), temp=%.1f°C",
                  soil.raw, soil.moisture_pct, temp.celsius)
 
         # 2. See
+        self._set_stage("capturing")
         photo_path = self._photo_path()
         saved_path = self.hardware.camera.capture(photo_path)
 
         # 3. Describe
+        self._set_stage("describing")
         description = self._vision.describe(saved_path)
         log.info("Describe: %s", description[:120])
 
         # 4. Reason
+        self._set_stage("reasoning")
         recent = self._db.recent_cycles(limit=8)
         decision, used_fallback = self._reasoning.decide(
             soil=soil,
@@ -94,6 +132,7 @@ class ControlLoop:
         )
 
         # 6. Act
+        self._set_stage("acting")
         if safe_decision.water:
             log.info("Act: watering for %.1fs", safe_decision.water_seconds)
             self.hardware.valve.pulse(safe_decision.water_seconds)

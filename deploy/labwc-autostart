@@ -1,0 +1,36 @@
+#!/bin/sh
+# Plant Life Support — kiosk autostart for labwc/Wayland.
+# Installed at: ~/.config/labwc/autostart
+
+# Wait for the dashboard (systemd plant.service) to start listening.
+until curl -s -o /dev/null http://localhost:8080/; do
+    sleep 1
+done
+
+# Pre-clear Chromium's "exit_type" so it doesn't show the
+# "Chromium didn't shut down correctly" yellow bar after a hard reboot.
+CHR_PREFS="$HOME/.config/chromium/Default/Preferences"
+if [ -f "$CHR_PREFS" ]; then
+    sed -i 's/"exit_type":"[^"]*"/"exit_type":"Normal"/' "$CHR_PREFS" 2>/dev/null
+    sed -i 's/"exited_cleanly":false/"exited_cleanly":true/' "$CHR_PREFS" 2>/dev/null
+fi
+
+# Launch in a respawn loop — if Chromium dies (crash, OOM, manual kill),
+# wait a moment and bring it back up.
+(
+    while true; do
+        chromium \
+            --ozone-platform=wayland \
+            --start-fullscreen \
+            --app=http://localhost:8080/ \
+            --noerrdialogs \
+            --disable-infobars \
+            --no-first-run \
+            --disable-translate \
+            --disable-features=TranslateUI \
+            --disable-session-crashed-bubble \
+            --check-for-update-interval=31536000 \
+            --password-store=basic
+        sleep 3
+    done
+) &

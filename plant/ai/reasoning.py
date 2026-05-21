@@ -64,6 +64,7 @@ class ReasoningClient:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
+                format=Decision.model_json_schema(),  # constrain decoding to schema
                 options={"temperature": 0.2},   # low temp → consistent JSON
             )
             raw = resp.message.content.strip()

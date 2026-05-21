@@ -7,14 +7,20 @@ Falls back gracefully if Ollama is unavailable.
 from __future__ import annotations
 
 import base64
+import io
 import logging
 from pathlib import Path
 
 import ollama
+from PIL import Image
 
 from plant.ai.prompts import VISION_PROMPT
 
 log = logging.getLogger(__name__)
+
+# Moondream downsamples internally; sending the full 5MP capture wastes RAM
+# and time. Shrink the longest side to this before encoding.
+VLM_IMAGE_MAX_SIDE = 640
 
 
 class VisionClient:
@@ -40,7 +46,7 @@ class VisionClient:
             return "[No photo available — visual assessment skipped.]"
 
         try:
-            image_b64 = base64.b64encode(path.read_bytes()).decode()
+            image_b64 = _encode_resized(path)
             log.info("VisionClient: sending photo to %s …", self._model)
             resp = self._client.chat(
                 model=self._model,
@@ -59,3 +65,15 @@ class VisionClient:
         except Exception as exc:
             log.warning("VisionClient: Ollama error — %s", exc)
             return f"[VLM unavailable: {exc}]"
+
+
+def _encode_resized(path: Path) -> str:
+    img = Image.open(path)
+    img.thumbnail((VLM_IMAGE_MAX_SIDE, VLM_IMAGE_MAX_SIDE))
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    log.debug("VisionClient: resized image %dx%d (%d KB)",
+             img.width, img.height, buf.tell() // 1024)
+    return base64.b64encode(buf.getvalue()).decode()

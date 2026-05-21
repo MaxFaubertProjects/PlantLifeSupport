@@ -6,7 +6,19 @@ Pydantic validates every field before the decision reaches safety.py.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, BeforeValidator
+from typing import Annotated
+
+
+def _coerce_int(v):
+    # Be lenient — small models sometimes emit floats ("3.0") or strings ("3").
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (int, float)):
+        return int(v)
+    if isinstance(v, str):
+        return int(float(v.strip()))
+    return v
 
 
 class Decision(BaseModel):
@@ -15,7 +27,7 @@ class Decision(BaseModel):
     water: bool = Field(
         description="True if the plant should be watered this cycle."
     )
-    water_seconds: int = Field(
+    water_seconds: Annotated[int, BeforeValidator(_coerce_int)] = Field(
         ge=0,
         le=60,
         description="Requested watering duration in seconds (0 if water=False).",

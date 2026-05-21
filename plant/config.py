@@ -25,4 +25,6 @@ def load(path: str | Path | None = None) -> dict[str, Any]:
     """
     cfg_path = Path(path) if path else _DEFAULT_PATH
     with cfg_path.open() as f:
-        return yaml.safe_load(f)
+        data = yaml.safe_load(f)
+    data["_config_path"] = str(cfg_path.resolve())
+    return data
