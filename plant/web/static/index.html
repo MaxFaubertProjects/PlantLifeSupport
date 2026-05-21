@@ -479,6 +479,44 @@
       border: 1px solid rgba(196,146,74,.2); border-radius: 4px;
       padding: 1px 5px; margin-bottom: 4px; letter-spacing: .04em;
     }
+    /* Slider fields */
+    .cfg-slider-field { margin-bottom: 24px; }
+    .cfg-slider-row {
+      display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px;
+    }
+    .cfg-slider-row .cfg-label { margin-bottom: 0; }
+    .cfg-slider-val {
+      margin-left: auto; font-family: "Newsreader", serif;
+      font-size: 18px; color: var(--accent); font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+    .cfg-slider {
+      width: 100%; height: 4px; -webkit-appearance: none; appearance: none;
+      background: var(--line); border-radius: 2px; outline: none;
+      cursor: pointer;
+    }
+    .cfg-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--accent); cursor: pointer; border: 2px solid #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,.18);
+    }
+    .cfg-slider::-moz-range-thumb {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--accent); cursor: pointer; border: 2px solid #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,.18);
+    }
+    .cfg-ranges-group {
+      margin-bottom: 28px; padding-bottom: 4px;
+      border-bottom: 1px solid var(--line);
+    }
+    .cfg-ranges-group:last-of-type { border-bottom: none; }
+    .cfg-ranges-title {
+      font-family: "Newsreader", serif; font-size: 18px;
+      font-weight: 500; color: var(--ink);
+      margin-bottom: 14px;
+    }
+
     /* Gear button */
     .gear-btn {
       width: 34px; height: 34px; border-radius: 9px;
@@ -665,6 +703,7 @@
       <div class="cfg-tabs">
         <button class="cfg-tab active" onclick="switchTab('schedule')">Schedule</button>
         <button class="cfg-tab" onclick="switchTab('plant')">Plant</button>
+        <button class="cfg-tab" onclick="switchTab('ranges')">Ranges</button>
         <button class="cfg-tab" onclick="switchTab('prompt')">Prompt</button>
         <button class="cfg-tab" onclick="switchTab('history')">History</button>
       </div>
@@ -702,6 +741,86 @@
               <p class="cfg-hint">Keep it factual: light preference, watering frequency, temperature range, overwatering sensitivity.</p>
             </div>
             <button class="cfg-save" onclick="savePlant()">Save plant</button>
+          </div>
+        </div>
+
+        <!-- Ranges -->
+        <div id="tab-ranges" class="cfg-tab-content">
+          <div class="cfg-section">
+
+            <div class="cfg-ranges-group">
+              <div class="cfg-ranges-title">💧 Soil moisture</div>
+              <div class="cfg-slider-field">
+                <div class="cfg-slider-row">
+                  <label class="cfg-label">Water below</label>
+                  <span class="cfg-slider-val" id="cfg-soil-dry-val">—</span>
+                </div>
+                <input type="range" min="10" max="60" step="1" id="cfg-soil-dry" class="cfg-slider">
+                <p class="cfg-hint">The AI considers watering when moisture drops under this level.</p>
+              </div>
+              <div class="cfg-slider-field">
+                <div class="cfg-slider-row">
+                  <label class="cfg-label">Already wet above</label>
+                  <span class="cfg-slider-val" id="cfg-soil-wet-val">—</span>
+                </div>
+                <input type="range" min="40" max="90" step="1" id="cfg-soil-wet" class="cfg-slider">
+                <p class="cfg-hint">Watering is overridden OFF when moisture is above this — prevents root rot.</p>
+              </div>
+            </div>
+
+            <div class="cfg-ranges-group">
+              <div class="cfg-ranges-title">🌡 Temperature</div>
+              <div class="cfg-slider-field">
+                <div class="cfg-slider-row">
+                  <label class="cfg-label">Too cold below</label>
+                  <span class="cfg-slider-val" id="cfg-temp-cold-val">—</span>
+                </div>
+                <input type="range" min="0" max="25" step="0.5" id="cfg-temp-cold" class="cfg-slider">
+                <p class="cfg-hint">Below this, the light is forced on for warmth.</p>
+              </div>
+              <div class="cfg-slider-field">
+                <div class="cfg-slider-row">
+                  <label class="cfg-label">Too hot above</label>
+                  <span class="cfg-slider-val" id="cfg-temp-hot-val">—</span>
+                </div>
+                <input type="range" min="20" max="40" step="0.5" id="cfg-temp-hot" class="cfg-slider">
+                <p class="cfg-hint">Above this, watering is suppressed to avoid heat-stress shock.</p>
+              </div>
+            </div>
+
+            <div class="cfg-ranges-group">
+              <div class="cfg-ranges-title">🚰 Watering</div>
+              <div class="cfg-slider-field">
+                <div class="cfg-slider-row">
+                  <label class="cfg-label">Max pulse</label>
+                  <span class="cfg-slider-val" id="cfg-water-max-val">—</span>
+                </div>
+                <input type="range" min="1" max="30" step="0.5" id="cfg-water-max" class="cfg-slider">
+                <p class="cfg-hint">Hard cap on how long the valve can open in a single watering.</p>
+              </div>
+              <div class="cfg-slider-field">
+                <div class="cfg-slider-row">
+                  <label class="cfg-label">Min wait between waterings</label>
+                  <span class="cfg-slider-val" id="cfg-water-interval-val">—</span>
+                </div>
+                <input type="range" min="15" max="240" step="5" id="cfg-water-interval" class="cfg-slider">
+                <p class="cfg-hint">The AI can't water again until this much time has passed.</p>
+              </div>
+            </div>
+
+            <div class="cfg-ranges-group">
+              <div class="cfg-ranges-title">☀ Grow light</div>
+              <div class="cfg-slider-field">
+                <div class="cfg-slider-row">
+                  <label class="cfg-label">Max hours per day</label>
+                  <span class="cfg-slider-val" id="cfg-light-max-val">—</span>
+                </div>
+                <input type="range" min="0" max="24" step="0.5" id="cfg-light-max" class="cfg-slider">
+                <p class="cfg-hint">The light won't stay on longer than this in a 24h window.</p>
+              </div>
+            </div>
+
+            <button class="cfg-save" onclick="saveRanges()">Save ranges</button>
           </div>
         </div>
 
@@ -809,12 +928,15 @@ async function api(method, path, body) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Render
 // ─────────────────────────────────────────────────────────────────────────────
-function moistureState(pct) {
+function moistureState(pct, th) {
   if (pct == null) return { tone: 'no reading', color: T.muted };
-  if (pct < 25) return { tone: 'thirsty',      color: T.warn };
-  if (pct < 45) return { tone: 'a touch dry',  color: T.amber };
-  if (pct < 70) return { tone: 'just right',   color: T.accent };
-  return            { tone: 'well watered',    color: T.blue };
+  const dry = (th && th.dry_pct) || 30;
+  const wet = (th && th.wet_pct) || 60;
+  const mid = (dry + wet) / 2;
+  if (pct < dry - 5)   return { tone: 'thirsty',     color: T.warn };
+  if (pct < dry)       return { tone: 'a touch dry', color: T.amber };
+  if (pct < wet)       return { tone: 'just right',  color: T.accent };
+  return                      { tone: 'well watered', color: T.blue };
 }
 
 function render(status, cycles) {
@@ -822,7 +944,8 @@ function render(status, cycles) {
 
   const latest = status.latest;
   const pct = latest ? latest.soil_pct : null;
-  const state = moistureState(pct);
+  const state = moistureState(pct, status.thresholds);
+  const th = status.thresholds || {};
 
   // ── Header ──
   document.getElementById('plant-name').textContent = status.plant.name;
@@ -881,7 +1004,9 @@ function render(status, cycles) {
   mb.setAttribute('width', String(Math.max(0, Math.min(120, 1.2 * (pct || 0)))));
   mb.setAttribute('fill', state.color);
   document.getElementById('tile-moisture-sub').textContent =
-    latest ? `ADC ${latest.soil_raw} of 1023` : '—';
+    th.dry_pct != null
+      ? `water below ${th.dry_pct}% · wet over ${th.wet_pct}%`
+      : (latest ? `ADC ${latest.soil_raw} of 1023` : '—');
 
   // Temp
   const tempBig = document.getElementById('tile-temp-big');
@@ -889,10 +1014,12 @@ function render(status, cycles) {
     ? `${latest.temp_celsius.toFixed(1)}<span class="unit">°C</span>` : '—';
   const tempVals = cycles.slice().reverse().map(c => c.temp_celsius).filter(v => v != null);
   renderSparkline(document.getElementById('tile-temp-spark'), tempVals, T.warn);
-  if (tempVals.length) {
-    const lo = Math.min(...tempVals).toFixed(0), hi = Math.max(...tempVals).toFixed(0);
-    document.getElementById('tile-temp-sub').textContent = `${lo}° – ${hi}° today`;
-  }
+  document.getElementById('tile-temp-sub').textContent =
+    th.too_cold_celsius != null
+      ? `safe ${th.too_cold_celsius}° – ${th.too_hot_celsius}°C`
+      : (tempVals.length
+          ? `${Math.min(...tempVals).toFixed(0)}° – ${Math.max(...tempVals).toFixed(0)}° today`
+          : '—');
 
   // Light
   lightOn = !!status.light_on;
@@ -900,7 +1027,9 @@ function render(status, cycles) {
   lightBig.textContent = lightOn ? 'On' : 'Off';
   lightBig.style.color = lightOn ? T.amber : T.muted;
   document.getElementById('tile-light-sub').textContent =
-    lightOn ? 'Currently growing' : 'Following schedule';
+    th.max_on_hours_per_day != null
+      ? `max ${th.max_on_hours_per_day}h / day`
+      : (lightOn ? 'Currently growing' : 'Following schedule');
   renderLightDots(document.getElementById('tile-light-dots'),
     cycles.slice(0, 16).reverse().map(c => c.final_light_on));
 
@@ -1086,33 +1215,43 @@ function renderTrends(cycles, latest, lightOn) {
   const chrono = cycles.slice().reverse();
   if (!chrono.length) return;
 
+  const th = (window.__lastStatus && window.__lastStatus.thresholds) || {};
   const moisture = chrono.map(c => c.soil_pct == null ? 0 : c.soil_pct);
   const temp     = chrono.map(c => c.temp_celsius == null ? null : c.temp_celsius);
   const tempClean = temp.filter(v => v != null);
   const lightArr = chrono.map(c => !!c.final_light_on);
   const watered  = chrono.map(c => !!c.final_water);
 
-  // Moisture sub-chart
+  // Moisture sub-chart — dry threshold (amber) + wet threshold (blue)
   drawSubChart(document.getElementById('sc-moisture'), moisture, {
     color: T.accent, fill: true,
     yMin: 0, yMax: 100, yLabels: [0, 25, 50, 75, 100], unit: '%',
-    threshold: 30, thresholdLabel: 'water at 30%',
+    thresholds: [
+      { value: th.dry_pct ?? 30, label: `water below ${th.dry_pct ?? 30}%`, color: T.warn  },
+      { value: th.wet_pct ?? 60, label: `wet ${th.wet_pct ?? 60}%`,         color: T.blue },
+    ],
     watered,
     width: 540, height: 120,
   });
   document.getElementById('sc-moisture-cur').textContent =
     latest && latest.soil_pct != null ? `${latest.soil_pct.toFixed(1)}%` : '—';
 
-  // Temperature sub-chart (dashed, autoscaled)
+  // Temperature sub-chart — too-cold (blue) + too-hot (warn) reference lines
   if (tempClean.length) {
-    const lo = Math.min(...tempClean), hi = Math.max(...tempClean);
-    const pad = (hi - lo) * 0.2 || 1;
+    const cold = th.too_cold_celsius ?? 15;
+    const hot  = th.too_hot_celsius ?? 32;
+    const lo = Math.min(...tempClean, cold), hi = Math.max(...tempClean, hot);
+    const pad = (hi - lo) * 0.15 || 1;
     const yLo = Math.floor(lo - pad), yHi = Math.ceil(hi + pad);
     drawSubChart(document.getElementById('sc-temp'), temp.map(v => v == null ? yLo : v), {
       color: T.warn, dashed: true,
       yMin: yLo, yMax: yHi,
       yLabels: [yLo, Math.round((yLo + yHi) / 2), yHi],
       unit: '°',
+      thresholds: [
+        { value: cold, label: `cold ${cold}°`, color: T.blue },
+        { value: hot,  label: `hot ${hot}°`,   color: T.warn },
+      ],
       width: 540, height: 100,
     });
   }
@@ -1138,7 +1277,7 @@ function drawSubChart(svg, values, opts) {
   svg.innerHTML = '';
   const ns = 'http://www.w3.org/2000/svg';
   const { color, fill, yMin, yMax, yLabels, unit = '',
-          threshold, thresholdLabel, dashed, watered,
+          threshold, thresholdLabel, thresholds, dashed, watered,
           width: w, height: h } = opts;
   const padL = 50, padTop = 18, padBottom = 6;
   const cw = w - padL - 8, ch = h - padTop - padBottom;
@@ -1179,22 +1318,30 @@ function drawSubChart(svg, values, opts) {
     svg.appendChild(tx);
   });
 
-  if (threshold != null) {
-    const y = baseY - (threshold - yMin) * sy;
+  // Threshold reference lines — accept either single {threshold,thresholdLabel}
+  // (legacy) or an array {thresholds: [{value,label,color}, …]}.
+  const refLines = thresholds
+    ? thresholds
+    : (threshold != null ? [{ value: threshold, label: thresholdLabel, color: T.warn }] : []);
+  refLines.forEach(({ value, label, color: lineColor }) => {
+    if (value < yMin || value > yMax) return;
+    const y = baseY - (value - yMin) * sy;
     const ln = document.createElementNS(ns, 'line');
     ln.setAttribute('x1', padL); ln.setAttribute('y1', y);
     ln.setAttribute('x2', w - 6); ln.setAttribute('y2', y);
-    ln.setAttribute('stroke', T.warn); ln.setAttribute('stroke-width', '1');
-    ln.setAttribute('stroke-dasharray', '4 3'); ln.setAttribute('opacity', '.5');
+    ln.setAttribute('stroke', lineColor || T.warn); ln.setAttribute('stroke-width', '1');
+    ln.setAttribute('stroke-dasharray', '4 3'); ln.setAttribute('opacity', '.55');
     svg.appendChild(ln);
-    const tx = document.createElementNS(ns, 'text');
-    tx.setAttribute('x', w - 10); tx.setAttribute('y', y - 3);
-    tx.setAttribute('fill', T.warn); tx.setAttribute('font-size', '9');
-    tx.setAttribute('text-anchor', 'end');
-    tx.setAttribute('font-family', 'DM Mono, monospace');
-    tx.textContent = thresholdLabel;
-    svg.appendChild(tx);
-  }
+    if (label) {
+      const tx = document.createElementNS(ns, 'text');
+      tx.setAttribute('x', w - 10); tx.setAttribute('y', y - 3);
+      tx.setAttribute('fill', lineColor || T.warn); tx.setAttribute('font-size', '9');
+      tx.setAttribute('text-anchor', 'end');
+      tx.setAttribute('font-family', 'DM Mono, monospace');
+      tx.textContent = label;
+      svg.appendChild(tx);
+    }
+  });
 
   if (fill) {
     const a = document.createElementNS(ns, 'path');
@@ -1360,8 +1507,8 @@ function closeCfg() {
 
 function switchTab(name) {
   activeTab = name;
+  const tabs = ['schedule', 'plant', 'ranges', 'prompt', 'history'];
   document.querySelectorAll('.cfg-tab').forEach((btn, i) => {
-    const tabs = ['schedule', 'plant', 'prompt', 'history'];
     btn.classList.toggle('active', tabs[i] === name);
   });
   document.querySelectorAll('.cfg-tab-content').forEach(el => {
@@ -1375,11 +1522,64 @@ function switchTab(name) {
 async function loadCfg() {
   try {
     const cfg = await api('GET', '/api/config');
-    document.getElementById('cfg-interval').value     = cfg.loop_interval_minutes || 60;
-    document.getElementById('cfg-plant-name').value   = cfg.plant.name || '';
+    document.getElementById('cfg-interval').value      = cfg.loop_interval_minutes || 60;
+    document.getElementById('cfg-plant-name').value    = cfg.plant.name || '';
     document.getElementById('cfg-plant-species').value = cfg.plant.species || '';
-    document.getElementById('cfg-plant-notes').value  = cfg.plant.species_notes || '';
+    document.getElementById('cfg-plant-notes').value   = cfg.plant.species_notes || '';
+
+    // Sliders
+    setSlider('cfg-soil-dry',        cfg.soil.dry_pct,                v => `${v}%`);
+    setSlider('cfg-soil-wet',        cfg.soil.wet_pct,                v => `${v}%`);
+    setSlider('cfg-temp-cold',       cfg.temperature.too_cold_celsius, v => `${v}°C`);
+    setSlider('cfg-temp-hot',        cfg.temperature.too_hot_celsius,  v => `${v}°C`);
+    setSlider('cfg-water-max',       cfg.watering.max_pulse_seconds,   v => `${v}s`);
+    setSlider('cfg-water-interval',  cfg.watering.min_interval_minutes, v => `${v} min`);
+    setSlider('cfg-light-max',       cfg.light.max_on_hours_per_day,   v => `${v}h`);
   } catch (e) { console.error('loadCfg', e); }
+}
+
+function setSlider(id, value, fmt) {
+  const input = document.getElementById(id);
+  const valEl = document.getElementById(id + '-val');
+  if (!input || !valEl) return;
+  input.value = value;
+  valEl.textContent = fmt(value);
+  // Wire up live updates exactly once per slider.
+  if (!input._wired) {
+    input.addEventListener('input', () => { valEl.textContent = fmt(input.value); });
+    input._wired = true;
+  }
+}
+
+async function saveRanges() {
+  const body = {
+    soil: {
+      dry_pct: parseFloat(document.getElementById('cfg-soil-dry').value),
+      wet_pct: parseFloat(document.getElementById('cfg-soil-wet').value),
+    },
+    temperature: {
+      too_cold_celsius: parseFloat(document.getElementById('cfg-temp-cold').value),
+      too_hot_celsius:  parseFloat(document.getElementById('cfg-temp-hot').value),
+    },
+    watering: {
+      max_pulse_seconds:    parseFloat(document.getElementById('cfg-water-max').value),
+      min_interval_minutes: parseInt(document.getElementById('cfg-water-interval').value, 10),
+    },
+    light: {
+      max_on_hours_per_day: parseFloat(document.getElementById('cfg-light-max').value),
+    },
+  };
+  if (body.soil.dry_pct >= body.soil.wet_pct) {
+    toast('Dry threshold must be below wet threshold'); return;
+  }
+  if (body.temperature.too_cold_celsius >= body.temperature.too_hot_celsius) {
+    toast('Too-cold must be below too-hot'); return;
+  }
+  try {
+    await api('POST', '/api/config', body);
+    toast('Ranges saved');
+    setTimeout(refresh, 600);
+  } catch (e) { toast('Error: ' + e.message); }
 }
 
 async function saveSchedule() {

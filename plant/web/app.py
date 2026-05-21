@@ -39,9 +39,42 @@ class PlantConfigSection(BaseModel):
     species_notes: Optional[str] = None
 
 
+class SoilRanges(BaseModel):
+    # The UI thinks in moisture percent (0–100, higher = wetter);
+    # we convert to ADC (0–1023, higher = drier) before storing.
+    dry_pct: Optional[float] = None
+    wet_pct: Optional[float] = None
+
+
+class TemperatureRanges(BaseModel):
+    too_cold_celsius: Optional[float] = None
+    too_hot_celsius: Optional[float] = None
+
+
+class WateringRanges(BaseModel):
+    max_pulse_seconds: Optional[float] = None
+    min_interval_minutes: Optional[int] = None
+
+
+class LightRanges(BaseModel):
+    max_on_hours_per_day: Optional[float] = None
+
+
 class ConfigUpdateRequest(BaseModel):
     loop_interval_minutes: Optional[int] = None
     plant: Optional[PlantConfigSection] = None
+    soil: Optional[SoilRanges] = None
+    temperature: Optional[TemperatureRanges] = None
+    watering: Optional[WateringRanges] = None
+    light: Optional[LightRanges] = None
+
+
+def _adc_to_pct(adc: int) -> float:
+    return round((1023 - adc) / 1023 * 100, 1)
+
+
+def _pct_to_adc(pct: float) -> int:
+    return max(0, min(1023, round(1023 * (1 - pct / 100))))
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +134,20 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             "species": plant_cfg.get("species", plant_cfg.get("name", "Plant")),
         }
 
+        soil_cfg  = cfg.get("soil", {})
+        temp_cfg  = cfg.get("temperature", {})
+        water_cfg = cfg.get("watering", {})
+        light_cfg = cfg.get("light", {})
+        thresholds = {
+            "dry_pct":              _adc_to_pct(soil_cfg.get("dry_threshold", 700)),
+            "wet_pct":              _adc_to_pct(soil_cfg.get("wet_threshold", 400)),
+            "too_cold_celsius":     temp_cfg.get("too_cold_celsius", 15.0),
+            "too_hot_celsius":      temp_cfg.get("too_hot_celsius", 32.0),
+            "max_pulse_seconds":    water_cfg.get("max_pulse_seconds", 8),
+            "min_interval_minutes": water_cfg.get("min_interval_minutes", 90),
+            "max_on_hours_per_day": light_cfg.get("max_on_hours_per_day", 16),
+        }
+
         return {
             "mode": cfg.get("mode", "simulation"),
             "cycle_count": db.cycle_count(),
@@ -108,6 +155,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             "latest": _cycle_to_dict(latest) if latest else None,
             "cycle_state": cycle_state,
             "plant": plant,
+            "thresholds": thresholds,
         }
 
     # ── API: cycles (for charts + reasoning log) ──────────────────────────────
@@ -159,12 +207,31 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     async def get_config() -> dict[str, Any]:
         """Return the current editable configuration."""
         plant = cfg.get("plant", {})
+        soil = cfg.get("soil", {})
+        temp = cfg.get("temperature", {})
+        water = cfg.get("watering", {})
+        light = cfg.get("light", {})
         return {
             "loop_interval_minutes": cfg.get("loop_interval_minutes", 60),
             "plant": {
                 "name": plant.get("name", ""),
                 "species": plant.get("species", ""),
                 "species_notes": plant.get("species_notes", ""),
+            },
+            "soil": {
+                "dry_pct": _adc_to_pct(soil.get("dry_threshold", 700)),
+                "wet_pct": _adc_to_pct(soil.get("wet_threshold", 400)),
+            },
+            "temperature": {
+                "too_cold_celsius": temp.get("too_cold_celsius", 15.0),
+                "too_hot_celsius":  temp.get("too_hot_celsius", 32.0),
+            },
+            "watering": {
+                "max_pulse_seconds":    water.get("max_pulse_seconds", 8),
+                "min_interval_minutes": water.get("min_interval_minutes", 90),
+            },
+            "light": {
+                "max_on_hours_per_day": light.get("max_on_hours_per_day", 16),
             },
         }
 
@@ -185,6 +252,36 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             if req.plant.species_notes is not None:
                 plant["species_notes"] = req.plant.species_notes
             log.info("Config: plant updated")
+
+        if req.soil is not None:
+            soil = cfg.setdefault("soil", {})
+            if req.soil.dry_pct is not None:
+                soil["dry_threshold"] = _pct_to_adc(req.soil.dry_pct)
+            if req.soil.wet_pct is not None:
+                soil["wet_threshold"] = _pct_to_adc(req.soil.wet_pct)
+            log.info("Config: soil thresholds updated")
+
+        if req.temperature is not None:
+            t = cfg.setdefault("temperature", {})
+            if req.temperature.too_cold_celsius is not None:
+                t["too_cold_celsius"] = req.temperature.too_cold_celsius
+            if req.temperature.too_hot_celsius is not None:
+                t["too_hot_celsius"] = req.temperature.too_hot_celsius
+            log.info("Config: temperature thresholds updated")
+
+        if req.watering is not None:
+            w = cfg.setdefault("watering", {})
+            if req.watering.max_pulse_seconds is not None:
+                w["max_pulse_seconds"] = req.watering.max_pulse_seconds
+            if req.watering.min_interval_minutes is not None:
+                w["min_interval_minutes"] = req.watering.min_interval_minutes
+            log.info("Config: watering limits updated")
+
+        if req.light is not None:
+            l = cfg.setdefault("light", {})
+            if req.light.max_on_hours_per_day is not None:
+                l["max_on_hours_per_day"] = req.light.max_on_hours_per_day
+            log.info("Config: light limits updated")
 
         config_path = cfg.get("_config_path")
         if config_path:
