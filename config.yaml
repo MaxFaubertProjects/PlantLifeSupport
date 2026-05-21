@@ -4,7 +4,7 @@
 # ── Runtime mode ─────────────────────────────────────────────────────────────
 # "simulation" : synthetic sensors + logged actuators (Mac dev / CI)
 # "hardware"   : real Pi drivers (MCP3008 soil ADC, DS18B20, gpiozero, picamera2)
-mode: simulation
+mode: hybrid
 
 # ── Schedule ─────────────────────────────────────────────────────────────────
 loop_interval_minutes: 60   # how often the decision pipeline runs
@@ -58,8 +58,8 @@ gpio:
 ai:
   ollama_base_url: "http://localhost:11434"
   vision_model: "moondream"        # VLM: image → plant description text
-  reasoning_model: "llama3.2:3b"   # LLM: context → structured Decision JSON
-  timeout_seconds: 120             # per-request timeout before fallback kicks in
+  reasoning_model: "llama3.2:1b"   # LLM: context → structured Decision JSON
+  timeout_seconds: 300             # per-request timeout before fallback kicks in
 
 # ── Storage ──────────────────────────────────────────────────────────────────
 storage:
