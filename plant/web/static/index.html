@@ -309,6 +309,20 @@
       background: var(--accent); color: #fff; border: none;
       box-shadow: 0 4px 12px rgba(122,154,90,.2);
     }
+    .softbtn.cycle.running {
+      animation: cycle-pulse 1.6s ease-in-out infinite;
+      cursor: default;
+    }
+    @keyframes cycle-pulse {
+      0%, 100% {
+        box-shadow: 0 4px 12px rgba(122,154,90,.20),
+                    0 0 0 0 rgba(122,154,90,.45);
+      }
+      50% {
+        box-shadow: 0 4px 16px rgba(122,154,90,.35),
+                    0 0 0 10px rgba(122,154,90,0);
+      }
+    }
     .softbtn-badge {
       width: 36px; height: 36px; border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
@@ -902,7 +916,18 @@ function render(status, cycles) {
 
   // Whether a cycle is mid-flight (used to toggle banner button + poll cadence)
   const active = status.cycle_state.stage && status.cycle_state.stage !== 'idle';
-  document.getElementById('cycle-btn').disabled = !!active;
+  const cycleBtn = document.getElementById('cycle-btn');
+  cycleBtn.disabled = !!active;
+  cycleBtn.classList.toggle('running', !!active);
+  const cycleLabel = cycleBtn.querySelector('.softbtn-label');
+  const cycleSub   = cycleBtn.querySelector('.softbtn-sub');
+  if (active) {
+    cycleLabel.textContent = 'Cycle running';
+    cycleSub.textContent = status.cycle_state.stage + '…';
+  } else {
+    cycleLabel.textContent = 'Run cycle now';
+    cycleSub.textContent = "don't wait";
+  }
 
   // Loading bar
   updateLoadingBar(status.cycle_state.stage);
