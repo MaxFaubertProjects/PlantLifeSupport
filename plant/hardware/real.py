@@ -96,7 +96,13 @@ class RealCamera:
     def capture(self, path: str) -> str:
         dest = Path(path)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        self._cam.capture_file(str(dest))
+        # picamera2 main stream delivers bytes in BGR order; PIL would save those as
+        # RGB and produce a red-tinted image. Capture as array and swap channels.
+        from PIL import Image
+        arr = self._cam.capture_array("main")
+        if arr.ndim == 3 and arr.shape[-1] >= 3:
+            arr = arr[..., 2::-1]  # take first 3 channels in reverse → RGB
+        Image.fromarray(arr).save(str(dest), "JPEG", quality=90)
         log.info("RealCamera: captured → %s", dest)
         return str(dest)
 
