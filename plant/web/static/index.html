@@ -703,7 +703,7 @@
       <div class="cfg-tabs">
         <button class="cfg-tab active" onclick="switchTab('schedule')">Schedule</button>
         <button class="cfg-tab" onclick="switchTab('plant')">Plant</button>
-        <button class="cfg-tab" onclick="switchTab('ranges')">Ranges</button>
+        <button class="cfg-tab" onclick="switchTab('ranges')">Safety limits</button>
         <button class="cfg-tab" onclick="switchTab('prompt')">Prompt</button>
         <button class="cfg-tab" onclick="switchTab('history')">History</button>
       </div>
@@ -744,9 +744,15 @@
           </div>
         </div>
 
-        <!-- Ranges -->
+        <!-- Safety limits -->
         <div id="tab-ranges" class="cfg-tab-content">
           <div class="cfg-section">
+
+            <p class="cfg-hint" style="margin-top:0;margin-bottom:24px;font-size:13px">
+              Guardrails that protect the plant if the AI gets it wrong. The AI sees these
+              values and reasons within them — they don't dictate when to water. To shape
+              the AI's <em>preferences</em>, edit the care notes in the Plant tab.
+            </p>
 
             <div class="cfg-ranges-group">
               <div class="cfg-ranges-title">💧 Soil moisture</div>
@@ -820,7 +826,7 @@
               </div>
             </div>
 
-            <button class="cfg-save" onclick="saveRanges()">Save ranges</button>
+            <button class="cfg-save" onclick="saveRanges()">Save safety limits</button>
           </div>
         </div>
 
@@ -1577,7 +1583,7 @@ async function saveRanges() {
   }
   try {
     await api('POST', '/api/config', body);
-    toast('Ranges saved');
+    toast('Safety limits saved');
     setTimeout(refresh, 600);
   } catch (e) { toast('Error: ' + e.message); }
 }

@@ -63,8 +63,18 @@ def build_reasoning_prompt(
         A (system, user) tuple ready to pass to the Ollama chat API.
     """
     plant = cfg["plant"]
+    soil_cfg = cfg.get("soil", {})
+    temp_cfg = cfg.get("temperature", {})
     watering = cfg["watering"]
     light = cfg["light"]
+
+    # Convert soil ADC thresholds to moisture % for human-readable prompting.
+    dry_adc = soil_cfg.get("dry_threshold", 700)
+    wet_adc = soil_cfg.get("wet_threshold", 400)
+    dry_pct = round((1023 - dry_adc) / 1023 * 100, 1)
+    wet_pct = round((1023 - wet_adc) / 1023 * 100, 1)
+    too_cold = temp_cfg.get("too_cold_celsius", 15.0)
+    too_hot  = temp_cfg.get("too_hot_celsius", 32.0)
 
     user = f"""\
 Plant: {plant['name']}
@@ -80,10 +90,18 @@ Visual observation:
 Recent history:
   {recent_cycles_summary.strip()}
 
-Safety limits (enforced in hardware — do not exceed):
-  Max watering pulse: {watering['max_pulse_seconds']}s
-  Min interval between waterings: {watering['min_interval_minutes']} minutes
-  Max light on per day: {light['max_on_hours_per_day']} hours
+Safety guardrails (these clamp your decision — you can reason within them freely):
+  • Soil considered "dry — watering allowed" below {dry_pct}% moisture
+  • Soil considered "already wet — watering overridden OFF" above {wet_pct}% moisture
+  • Temperature too cold below {too_cold} °C → light is forced on for warmth
+  • Temperature too hot above {too_hot} °C → watering is suppressed (heat-stress risk)
+  • Max watering pulse: {watering['max_pulse_seconds']}s per cycle
+  • Min interval between waterings: {watering['min_interval_minutes']} minutes
+  • Max light on per day: {light['max_on_hours_per_day']} hours
+
+You are autonomous within these guardrails. Use the visual observation and species
+notes to make a judgement call — moisture % alone doesn't tell the full story (a
+wilting plant in 40% moisture may still need water; a perky plant in 25% may not).
 
 Decide: should the plant be watered this cycle? Should the grow light be on?
 Reply with JSON only.\
