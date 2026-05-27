@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 def apply_safety(
     cfg: dict,
     proposed: Decision,
-    soil: SoilReading,
+    soil: SoilReading | None,
     recent_cycles: list,   # Sequence[Cycle] — avoids circular import
 ) -> Decision:
     """Return a (possibly modified) Decision that passes all safety checks.
@@ -71,9 +71,17 @@ def apply_safety(
                 water = False
                 water_seconds = 0
 
-    # 3. No watering if soil is already moist
+    # 3. No watering if soil is already moist — or if moisture is unknown.
+    #    Without a soil reading we cannot rule out an already-wet pot, so we
+    #    suppress watering entirely (overwatering causes root rot).
     wet_threshold = soil_cfg["wet_threshold"]
-    if water and soil.raw < wet_threshold:
+    if water and soil is None:
+        notes.append(
+            "watering suppressed — no soil sensor, moisture cannot be verified"
+        )
+        water = False
+        water_seconds = 0
+    elif water and soil.raw < wet_threshold:
         notes.append(
             f"watering suppressed — soil moist (ADC {soil.raw} < {wet_threshold})"
         )

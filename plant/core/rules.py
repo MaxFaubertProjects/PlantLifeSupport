@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 
 def rule_based_decision(
     cfg: dict,
-    soil: SoilReading,
+    soil: SoilReading | None,
     temp: TemperatureReading,
     fallback_reason: str = "rule-based fallback",
 ) -> Decision:
@@ -26,6 +26,7 @@ def rule_based_decision(
     Logic:
     - Water if soil ADC raw > dry_threshold (soil is dry).
     - Don't water if soil ADC raw < wet_threshold (already moist).
+    - Never water if soil is None (no sensor — moisture unverifiable).
     - Turn light on if temperature < too_cold_celsius.
     - Never water if temperature > too_hot_celsius.
     """
@@ -40,7 +41,11 @@ def rule_based_decision(
     too_hot = temp_cfg["too_hot_celsius"]
 
     # Decide watering
-    if temp.celsius > too_hot:
+    if soil is None:
+        water = False
+        water_secs = 0
+        reason_water = "no soil sensor — cannot verify moisture, skipping water"
+    elif temp.celsius > too_hot:
         water = False
         water_secs = 0
         reason_water = f"too hot ({temp.celsius:.1f}°C > {too_hot}°C) — skipping water"
@@ -65,10 +70,14 @@ def rule_based_decision(
         else "temperature OK — light follows normal schedule"
     )
 
+    soil_summary = (
+        f"Soil ADC={soil.raw} ({soil.moisture_pct:.0f}% moisture)"
+        if soil is not None
+        else "Soil: no sensor connected"
+    )
     reasoning = (
         f"[{fallback_reason}] "
-        f"Soil ADC={soil.raw} ({soil.moisture_pct:.0f}% moisture), "
-        f"temp={temp.celsius:.1f}°C. "
+        f"{soil_summary}, temp={temp.celsius:.1f}°C. "
         f"{reason_water}. {reason_light}."
     )
 

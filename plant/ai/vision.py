@@ -14,7 +14,7 @@ from pathlib import Path
 import ollama
 from PIL import Image
 
-from plant.ai.prompts import VISION_PROMPT
+from plant.ai.prompts import get_vision_prompt
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class VisionClient:
         ai = cfg["ai"]
         self._model = ai["vision_model"]
         self._timeout = ai["timeout_seconds"]
+        self._cfg = cfg
         self._client = ollama.Client(
             host=ai["ollama_base_url"],
             timeout=self._timeout,
@@ -53,7 +54,7 @@ class VisionClient:
                 messages=[
                     {
                         "role": "user",
-                        "content": VISION_PROMPT,
+                        "content": get_vision_prompt(self._cfg),
                         "images": [image_b64],
                     }
                 ],

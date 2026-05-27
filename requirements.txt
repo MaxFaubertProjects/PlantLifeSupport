@@ -12,12 +12,19 @@ uvicorn[standard]>=0.29
 # ── Storage ───────────────────────────────────────────────────────────────────
 # SQLite ships with Python — no extra package needed.
 
-# ── Hardware (Pi only — installed manually on the Pi, not needed on Mac) ─────
+# ── Hardware (Pi only — not needed on Mac) ───────────────────────────────────
+# Most drivers install into the venv with pip:
+#   pip install spidev gpiozero w1thermsensor pillow
+# picamera2 CANNOT be pip-installed (libcamera has no wheel). It ships as the
+# apt package python3-picamera2; expose it to the venv by setting
+#   include-system-site-packages = true
+# in .venv/pyvenv.cfg.
 # spidev>=3.6          # SPI access for MCP3008
 # RPi.GPIO>=0.7        # GPIO control (gpiozero wraps this)
 # gpiozero>=2.0        # relay / actuator control
-# picamera2>=0.3       # camera capture
+# picamera2            # camera capture — apt: python3-picamera2 (system site-packages)
 # w1thermsensor>=2.3   # DS18B20 1-wire temperature probe
+# Pillow>=10.0         # image processing for camera capture
 
 # ── Dev / test ────────────────────────────────────────────────────────────────
 pytest>=8.0

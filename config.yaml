@@ -4,7 +4,7 @@
 # ── Runtime mode ─────────────────────────────────────────────────────────────
 # "simulation" : synthetic sensors + logged actuators (Mac dev / CI)
 # "hardware"   : real Pi drivers (MCP3008 soil ADC, DS18B20, gpiozero, picamera2)
-mode: hybrid
+mode: hardware
 
 # ── Schedule ─────────────────────────────────────────────────────────────────
 loop_interval_minutes: 60   # how often the decision pipeline runs
@@ -20,6 +20,11 @@ plant:
 # ── Soil moisture ─────────────────────────────────────────────────────────────
 # MCP3008 returns 0–1023 (10-bit). Higher value = drier soil on a resistive sensor.
 soil:
+  # Which soil sensor to use:
+  #   "mcp3008" — real MCP3008 ADC over SPI (set this once the chip is wired)
+  #   "none"    — no sensor installed; moisture reported as unavailable
+  #   "mock"    — synthetic simulation data
+  sensor: mcp3008
   # Thresholds for the rule-based fallback (rules.py)
   dry_threshold: 700        # above this → consider watering
   wet_threshold: 400        # below this → soil is moist, skip watering
@@ -46,19 +51,29 @@ watering:
 
 # ── Grow light limits ─────────────────────────────────────────────────────────
 light:
+  # How to drive the grow light:
+  #   "uhubctl" — USB hub power switching (temporary, no relay HAT needed)
+  #   "relay"   — gpiozero via Waveshare HAT (permanent, set light_gpio above)
+  #   "mock"    — logged-only, no real hardware (hybrid mode default)
+  control: relay
   max_on_hours_per_day: 16      # safety cap
 
 # ── GPIO (hardware mode only) ────────────────────────────────────────────────
 # Fill these in from the relay board's silkscreen BEFORE running in hardware mode.
 gpio:
-  valve_gpio: 17       # BCM pin driving Relay 1 (solenoid valve)
-  light_gpio: 27       # BCM pin driving Relay 2 (grow light)
+  valve_gpio: 26       # BCM pin driving Relay 1 (pump) — Waveshare HAT pin 37
+  light_gpio: 20       # BCM pin driving Relay 2 (grow light USB) — Waveshare HAT pin 38
+  # Relay 3 (BCM 21, pin 40) spare — future use
 
 # ── AI models (Ollama) ────────────────────────────────────────────────────────
 ai:
   ollama_base_url: "http://localhost:11434"
   vision_model: "moondream"        # VLM: image → plant description text
-  reasoning_model: "llama3.2:1b"   # LLM: context → structured Decision JSON
+  reasoning_model: "llama3.1:8b"   # LLM: context → structured Decision JSON
+  # 8b fits in 8 GB RAM in console mode with the camera closing between
+  # captures and OLLAMA_MAX_LOADED_MODELS=1 (peak ~6 GB used, no swap).
+  # Earlier "OOM" crashes turned out to be brownouts on an inadequate PSU.
+  # Fallback to llama3.2:3b is a one-line config change if 8b ever struggles.
   timeout_seconds: 300             # per-request timeout before fallback kicks in
 
 # ── Storage ──────────────────────────────────────────────────────────────────

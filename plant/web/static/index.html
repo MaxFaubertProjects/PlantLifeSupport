@@ -157,9 +157,12 @@
     .hero-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
     .hero-cid { color: var(--muted); margin-left: 4px; }
 
-    /* Plant note */
+    /* Plant note — the AI's reasoning panel.
+       Darker warm tan background visually distinguishes the AI's voice from
+       the surrounding tiles/panels, and makes the long-form reasoning text
+       easier on the eyes than near-white. */
     .note {
-      background: var(--surface); border: 1px solid var(--line);
+      background: #e8dfc5; border: 1px solid #d4c9a8;
       border-radius: 14px; padding: 14px 16px;
       display: flex; flex-direction: column; gap: 6px;
     }
@@ -455,6 +458,13 @@
       word-break: break-word;
     }
     .cfg-prompt-section { margin-bottom: 22px; }
+    .cfg-reset-btn {
+      font-size: 11px; color: var(--muted); background: none;
+      border: 1px solid var(--line); border-radius: 6px;
+      padding: 3px 10px; cursor: pointer; font-family: inherit;
+      transition: color .12s, border-color .12s;
+    }
+    .cfg-reset-btn:hover { color: var(--ink); border-color: var(--muted); }
     /* History tab */
     .h-row {
       padding: 14px 0; border-bottom: 1px solid var(--line);
@@ -620,7 +630,7 @@
           <div class="trends">
             <div class="trends-hdr">
               <span class="label">Trends</span>
-              <span class="trends-tf">· last 4h</span>
+              <span class="trends-tf" id="trends-tf">· today</span>
             </div>
             <div class="sub-chart" style="flex:1">
               <div class="sub-chart-hdr">
@@ -650,8 +660,9 @@
               <div class="light-strip" id="sc-light-strip" style="flex:1;height:auto"></div>
             </div>
             <div class="axis-row">
-              <span class="axis-tick" id="axis-start">—</span>
-              <span class="axis-tick">now</span>
+              <span class="axis-tick" id="axis-start">00:00</span>
+              <span class="axis-tick" id="axis-mid">—</span>
+              <span class="axis-tick" id="axis-end">now</span>
             </div>
           </div>
           <div class="reasoning">
@@ -664,11 +675,11 @@
         </div>
 
         <div class="controls">
-          <button class="softbtn water" onclick="manualWater()">
-            <div class="softbtn-badge">💧</div>
+          <button class="softbtn water" id="water-btn" onclick="onWaterButton()">
+            <div class="softbtn-badge" id="water-btn-badge">💧</div>
             <div class="softbtn-text">
-              <div class="softbtn-label">Water 3s</div>
-              <div class="softbtn-sub">give a drink</div>
+              <div class="softbtn-label" id="water-btn-label">Water 3s</div>
+              <div class="softbtn-sub" id="water-btn-sub">give a drink</div>
             </div>
           </button>
           <button class="softbtn cycle" id="cycle-btn" onclick="triggerCycle()">
@@ -833,19 +844,30 @@
         <!-- Prompt -->
         <div id="tab-prompt" class="cfg-tab-content">
           <div class="cfg-section" style="max-width:860px">
-            <div class="cfg-prompt-section">
-              <div class="label" style="margin-bottom:8px">Vision prompt — sent to moondream with each photo</div>
-              <div class="cfg-prompt-box" id="prompt-vision"></div>
+            <p class="cfg-hint" style="margin-top:0;margin-bottom:24px;font-size:13px">
+              These prompts are sent to the AI models every cycle. Changes take effect on the next cycle.
+              Use <em>Reset to default</em> to restore the built-in text.
+            </p>
+            <div class="cfg-field">
+              <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:7px">
+                <label class="cfg-label" style="margin-bottom:0">Vision prompt — sent to moondream with each photo</label>
+                <button class="cfg-reset-btn" onclick="resetPrompt('vision')">Reset to default</button>
+              </div>
+              <textarea id="prompt-vision" class="cfg-textarea mono" rows="7"></textarea>
             </div>
-            <div class="cfg-prompt-section">
-              <div class="label" style="margin-bottom:8px">Reasoning system prompt — sent to llama every cycle</div>
-              <div class="cfg-prompt-box" id="prompt-system"></div>
+            <div class="cfg-field">
+              <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:7px">
+                <label class="cfg-label" style="margin-bottom:0">Reasoning system prompt — sent to llama every cycle</label>
+                <button class="cfg-reset-btn" onclick="resetPrompt('reasoning_system')">Reset to default</button>
+              </div>
+              <textarea id="prompt-system" class="cfg-textarea mono" rows="10"></textarea>
             </div>
-            <div class="cfg-prompt-section">
-              <div class="label" style="margin-bottom:8px">Plant context injected into the reasoning user prompt</div>
+            <div class="cfg-field">
+              <label class="cfg-label">Plant context injected into reasoning user prompt</label>
               <div class="cfg-prompt-box" id="prompt-plant-notes"></div>
               <p class="cfg-hint">Edit this text in the Plant tab above.</p>
             </div>
+            <button class="cfg-save" onclick="savePrompts()">Save prompts</button>
           </div>
         </div>
 
@@ -869,6 +891,7 @@ const STAGES = ['sensing', 'capturing', 'describing', 'reasoning', 'acting'];
 const T = { accent:'#7a9a5a', warn:'#c4924a', amber:'#c4924a', blue:'#6a8aaa',
             line:'#e0d8c5', muted:'#898578', ink:'#2a2e26', surface:'#fefbf3' };
 let lightOn = false;
+let pumpOn = false;
 let cycleStartedAt = null;
 let elapsedTimer = null;
 let etaBase = null;          // {at: Date, sec: number} — for client-side countdown between polls
@@ -952,6 +975,8 @@ function render(status, cycles) {
   const pct = latest ? latest.soil_pct : null;
   const state = moistureState(pct, status.thresholds);
   const th = status.thresholds || {};
+  // A soil sensor reports `available: false` when none is wired up.
+  const soilConnected = !status.sensors || status.sensors.soil !== false;
 
   // ── Header ──
   document.getElementById('plant-name').textContent = status.plant.name;
@@ -971,7 +996,9 @@ function render(status, cycles) {
   dot.style.boxShadow = `0 0 0 4px ${state.color}22`;
 
   const narText = document.getElementById('nar-text');
-  narText.innerHTML = `Soil is <em style="color:${state.color}">${state.tone}</em>.`;
+  narText.innerHTML = soilConnected
+    ? `Soil is <em style="color:${state.color}">${state.tone}</em>.`
+    : `Watching by <em style="color:${T.accent}">camera</em> &amp; <em style="color:${T.warn}">temperature</em>.`;
 
   document.getElementById('nar-sub').textContent =
     latest
@@ -982,12 +1009,16 @@ function render(status, cycles) {
   renderPipeline(status.cycle_state);
 
   // ── Hero ──
-  if (latest && latest.photo_url) {
-    const img = document.getElementById('hero-img');
-    const wanted = `${latest.photo_url}?v=${latest.id}`;
-    if (img.getAttribute('src') !== wanted) img.src = wanted;
-    document.getElementById('hero-time').textContent = `Latest capture · ${hm(latest.ts)}`;
+  // The hero image itself is driven by the snapshot-refresh loop (see
+  // refreshSnapshot() below) so it stays live-ish. We only update the
+  // captions here, which reference the most recent completed cycle.
+  if (latest) {
+    document.getElementById('hero-time').textContent =
+      `Live view · last cycle ${hm(latest.ts)}`;
     document.getElementById('hero-cid').textContent = `· #${latest.id}`;
+  } else {
+    document.getElementById('hero-time').textContent = 'Live view';
+    document.getElementById('hero-cid').textContent = '';
   }
 
   // ── Plant note ──
@@ -1003,16 +1034,23 @@ function render(status, cycles) {
 
   // ── Tiles ──
   const moistureBig = document.getElementById('tile-moisture-big');
-  moistureBig.innerHTML = pct != null
-    ? `${pct.toFixed(1)}<span class="unit">%</span>` : '—';
-  moistureBig.style.color = state.color;
   const mb = document.getElementById('tile-moisture-bar');
-  mb.setAttribute('width', String(Math.max(0, Math.min(120, 1.2 * (pct || 0)))));
-  mb.setAttribute('fill', state.color);
-  document.getElementById('tile-moisture-sub').textContent =
-    th.dry_pct != null
-      ? `water below ${th.dry_pct}% · wet over ${th.wet_pct}%`
-      : (latest ? `ADC ${latest.soil_raw} of 1023` : '—');
+  if (!soilConnected) {
+    moistureBig.innerHTML = '<span class="unit">—</span>';
+    moistureBig.style.color = T.muted;
+    mb.setAttribute('width', '0');
+    document.getElementById('tile-moisture-sub').textContent = 'soil sensor not wired yet';
+  } else {
+    moistureBig.innerHTML = pct != null
+      ? `${pct.toFixed(1)}<span class="unit">%</span>` : '—';
+    moistureBig.style.color = state.color;
+    mb.setAttribute('width', String(Math.max(0, Math.min(120, 1.2 * (pct || 0)))));
+    mb.setAttribute('fill', state.color);
+    document.getElementById('tile-moisture-sub').textContent =
+      th.dry_pct != null
+        ? `water below ${th.dry_pct}% · wet over ${th.wet_pct}%`
+        : (latest ? `ADC ${latest.soil_raw} of 1023` : '—');
+  }
 
   // Temp
   const tempBig = document.getElementById('tile-temp-big');
@@ -1057,6 +1095,26 @@ function render(status, cycles) {
   document.getElementById('light-btn-sub').textContent =
     lightOn ? 'kill the lamp' : 'engage the lamp';
 
+  // ── Water/pump button — reflects live valve state ──
+  pumpOn = !!status.pump_on;
+  const waterBtn = document.getElementById('water-btn');
+  const waterLabel = document.getElementById('water-btn-label');
+  const waterSub = document.getElementById('water-btn-sub');
+  const waterBadge = document.getElementById('water-btn-badge');
+  if (pumpOn) {
+    waterLabel.textContent = 'Stop pump';
+    waterSub.textContent = 'cut the flow';
+    waterBadge.textContent = '■';
+    waterBtn.style.borderColor = T.warn;
+    waterBtn.style.background = `linear-gradient(180deg, ${T.warn}22, ${T.warn}11)`;
+  } else {
+    waterLabel.textContent = 'Water 3s';
+    waterSub.textContent = 'give a drink';
+    waterBadge.textContent = '💧';
+    waterBtn.style.borderColor = '';
+    waterBtn.style.background = '';
+  }
+
   // Whether a cycle is mid-flight (used to toggle banner button + poll cadence)
   const active = status.cycle_state.stage && status.cycle_state.stage !== 'idle';
   const cycleBtn = document.getElementById('cycle-btn');
@@ -1075,7 +1133,9 @@ function render(status, cycles) {
   // Loading bar
   updateLoadingBar(status.cycle_state.stage);
 
-  return active;
+  // Treat the pump being on as "active" too — so polling stays at REFRESH_ACTIVE
+  // (2s) and the button updates promptly when the pulse finishes.
+  return active || pumpOn;
 }
 
 // ── Loading bar ───────────────────────────────────────────────────────────────
@@ -1217,18 +1277,35 @@ function renderLightDots(container, onSeries) {
 // Trends panel — three sub-charts sharing a time axis
 // ─────────────────────────────────────────────────────────────────────────────
 function renderTrends(cycles, latest, lightOn) {
-  // cycles is newest-first; reverse to chronological
-  const chrono = cycles.slice().reverse();
+  // ── Window: today 00:00 local → now ────────────────────────────────────
+  const now      = new Date();
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const dayMs    = 24 * 60 * 60 * 1000;
+  const winStart = midnight.getTime();
+  const winEnd   = winStart + dayMs;   // tomorrow midnight (full 24h axis)
+
+  // Filter to today's cycles only, chronological order
+  const chrono = cycles.slice().reverse()
+    .filter(c => { const t = new Date(c.ts).getTime(); return t >= winStart && t < winEnd; });
+
+  // x-position fraction (0–1) for each cycle within the 24h window
+  const xPos = chrono.map(c => (new Date(c.ts).getTime() - winStart) / dayMs);
+
+  // Update axis labels
+  document.getElementById('axis-start').textContent = '00:00';
+  document.getElementById('axis-mid').textContent   = '12:00';
+  document.getElementById('axis-end').textContent   =
+    now.getHours() === 23 && now.getMinutes() > 55 ? '24:00' : hm(now.toISOString());
+
   if (!chrono.length) return;
 
   const th = (window.__lastStatus && window.__lastStatus.thresholds) || {};
   const moisture = chrono.map(c => c.soil_pct == null ? 0 : c.soil_pct);
   const temp     = chrono.map(c => c.temp_celsius == null ? null : c.temp_celsius);
   const tempClean = temp.filter(v => v != null);
-  const lightArr = chrono.map(c => !!c.final_light_on);
   const watered  = chrono.map(c => !!c.final_water);
 
-  // Moisture sub-chart — dry threshold (amber) + wet threshold (blue)
+  // Moisture sub-chart
   drawSubChart(document.getElementById('sc-moisture'), moisture, {
     color: T.accent, fill: true,
     yMin: 0, yMax: 100, yLabels: [0, 25, 50, 75, 100], unit: '%',
@@ -1236,13 +1313,13 @@ function renderTrends(cycles, latest, lightOn) {
       { value: th.dry_pct ?? 30, label: `water below ${th.dry_pct ?? 30}%`, color: T.warn  },
       { value: th.wet_pct ?? 60, label: `wet ${th.wet_pct ?? 60}%`,         color: T.blue },
     ],
-    watered,
+    watered, xPositions: xPos,
     width: 540, height: 120,
   });
   document.getElementById('sc-moisture-cur').textContent =
     latest && latest.soil_pct != null ? `${latest.soil_pct.toFixed(1)}%` : '—';
 
-  // Temperature sub-chart — too-cold (blue) + too-hot (warn) reference lines
+  // Temperature sub-chart
   if (tempClean.length) {
     const cold = th.too_cold_celsius ?? 15;
     const hot  = th.too_hot_celsius ?? 32;
@@ -1258,25 +1335,29 @@ function renderTrends(cycles, latest, lightOn) {
         { value: cold, label: `cold ${cold}°`, color: T.blue },
         { value: hot,  label: `hot ${hot}°`,   color: T.warn },
       ],
+      xPositions: xPos,
       width: 540, height: 100,
     });
   }
   document.getElementById('sc-temp-cur').textContent =
     latest && latest.temp_celsius != null ? `${latest.temp_celsius.toFixed(1)}°C` : '—';
 
-  // Grow-light strip
+  // Grow-light strip — render as time-positioned blocks within the 24h window
   const strip = document.getElementById('sc-light-strip');
   strip.innerHTML = '';
-  lightArr.forEach(on => {
+  strip.style.position = 'relative';
+  chrono.forEach((c, i) => {
+    const x0 = xPos[i];
+    const x1 = i + 1 < xPos.length ? xPos[i + 1] : Math.min(1, x0 + 1 / 24);
     const d = document.createElement('div');
-    d.style.background = on ? T.amber : T.line;
-    d.style.opacity = on ? 0.95 : 0.5;
+    d.style.cssText = `position:absolute;top:0;bottom:0;
+      left:${(x0 * 100).toFixed(2)}%;
+      width:${((x1 - x0) * 100).toFixed(2)}%;
+      background:${c.final_light_on ? T.amber : T.line};
+      opacity:${c.final_light_on ? 0.95 : 0.5}`;
     strip.appendChild(d);
   });
   document.getElementById('sc-light-cur').textContent = lightOn ? 'on now' : 'off now';
-
-  // Axis start time
-  document.getElementById('axis-start').textContent = hm(chrono[0].ts);
 }
 
 function drawSubChart(svg, values, opts) {
@@ -1284,16 +1365,24 @@ function drawSubChart(svg, values, opts) {
   const ns = 'http://www.w3.org/2000/svg';
   const { color, fill, yMin, yMax, yLabels, unit = '',
           threshold, thresholdLabel, thresholds, dashed, watered,
+          xPositions,
           width: w, height: h } = opts;
   const padL = 50, padTop = 18, padBottom = 6;
   const cw = w - padL - 8, ch = h - padTop - padBottom;
-  const sx = cw / (values.length - 1 || 1);
   const sy = ch / (yMax - yMin || 1);
   const baseY = padTop + ch;
-  const pts = values.map((v, i) => [padL + i * sx, baseY - (v - yMin) * sy]);
+  // If xPositions provided, place each point at its fraction of the chart width;
+  // otherwise fall back to even spacing.
+  const pts = values.map((v, i) => {
+    const x = xPositions
+      ? padL + xPositions[i] * cw
+      : padL + (i / (values.length - 1 || 1)) * cw;
+    return [x, baseY - (v - yMin) * sy];
+  });
   const line = pts.map(([x, y], i) =>
     (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1)).join(' ');
-  const area = line + ` L ${padL + (values.length - 1) * sx},${baseY} L ${padL},${baseY} Z`;
+  const lastX = pts.length ? pts[pts.length - 1][0] : padL;
+  const area = line + ` L ${lastX.toFixed(1)},${baseY} L ${padL},${baseY} Z`;
   const gradId = 'g-' + Math.random().toString(36).slice(2, 8);
 
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
@@ -1430,7 +1519,7 @@ async function refresh() {
   try {
     const [status, cycles] = await Promise.all([
       api('GET', '/api/status'),
-      api('GET', '/api/cycles?limit=48'),
+      api('GET', '/api/cycles?limit=24'),
     ]);
     window.__lastStatus = status;
     active = render(status, cycles);
@@ -1442,11 +1531,32 @@ async function refresh() {
   }
 }
 
+async function onWaterButton() {
+  // Dispatcher — start a pulse if the pump is off, stop it if it's running.
+  if (pumpOn) {
+    return manualStop();
+  }
+  return manualWater();
+}
+
 async function manualWater() {
   try {
-    const r = await api('POST', '/api/water', { seconds: 3 });
+    // Fire and refresh immediately so the button flips to "Stop pump" while
+    // the 3s pulse is in flight. The /api/water request itself blocks for
+    // the full duration; the early refresh shows live state.
+    const promise = api('POST', '/api/water', { seconds: 3 });
+    setTimeout(refresh, 200);
+    const r = await promise;
     toast(`💧 Watered for ${r.watered_seconds}s`);
-    setTimeout(refresh, 1500);
+    setTimeout(refresh, 200);
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+async function manualStop() {
+  try {
+    await api('POST', '/api/water/stop');
+    toast('■ Pump stopped');
+    setTimeout(refresh, 200);
   } catch (e) { toast('Error: ' + e.message); }
 }
 
@@ -1472,30 +1582,7 @@ async function triggerCycle() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Config panel
 // ─────────────────────────────────────────────────────────────────────────────
-const VISION_PROMPT = `You are a plant-health assistant. Describe what you see in this photo of a plant.
-Focus on:
-- Leaf colour (green, yellow, brown patches, wilting?)
-- Stem and overall posture (upright, drooping?)
-- Visible soil surface (dry, moist, cracked?)
-- Any signs of pests, disease, or physical damage
-
-Be concise — 2–4 sentences. Do not give watering advice; just describe what you observe.`;
-
-const REASONING_SYSTEM = `You are an expert autonomous plant caretaker. You receive sensor data and a visual
-description of a plant, then decide whether to water it and whether to leave the
-grow light on. You must reply with valid JSON matching this exact schema:
-
-{
-  "water": <true|false>,
-  "water_seconds": <integer 0–60>,
-  "light_on": <true|false>,
-  "reasoning": "<1–3 sentence plain-English explanation>"
-}
-
-Rules:
-- water_seconds must be 0 when water is false.
-- Be conservative with watering — overwatering causes root rot.
-- Reply with JSON only. No markdown fences, no extra keys.`;
+let promptDefaults = { vision: '', reasoning_system: '' };
 
 let cfgOpen = false;
 let activeTab = 'schedule';
@@ -1608,14 +1695,35 @@ async function savePlant() {
   } catch (e) { toast('Error: ' + e.message); }
 }
 
-function renderPromptTab() {
-  document.getElementById('prompt-vision').textContent  = VISION_PROMPT;
-  document.getElementById('prompt-system').textContent  = REASONING_SYSTEM;
+async function renderPromptTab() {
+  try {
+    const p = await api('GET', '/api/prompts');
+    promptDefaults.vision           = p.vision_default;
+    promptDefaults.reasoning_system = p.reasoning_system_default;
+    document.getElementById('prompt-vision').value = p.vision;
+    document.getElementById('prompt-system').value = p.reasoning_system;
+  } catch (e) { console.error('renderPromptTab', e); }
   const notes = document.getElementById('cfg-plant-notes').value ||
     (window.__lastStatus && window.__lastStatus.plant
       ? `Plant: ${window.__lastStatus.plant.name}\nSpecies notes: (load Plant tab to see)`
       : '—');
   document.getElementById('prompt-plant-notes').textContent = notes;
+}
+
+async function savePrompts() {
+  const vision           = document.getElementById('prompt-vision').value;
+  const reasoning_system = document.getElementById('prompt-system').value;
+  try {
+    await api('POST', '/api/prompts', { vision, reasoning_system });
+    toast('Prompts saved — takes effect next cycle');
+  } catch (e) { toast('Error: ' + e.message); }
+}
+
+function resetPrompt(which) {
+  const def = promptDefaults[which];
+  if (!def) return;
+  if (which === 'vision')            document.getElementById('prompt-vision').value = def;
+  if (which === 'reasoning_system')  document.getElementById('prompt-system').value = def;
 }
 
 function renderHistory() {
@@ -1654,8 +1762,90 @@ document.querySelectorAll('.cfg-tab-content').forEach(el => {
   el.style.display = el.id === 'tab-schedule' ? 'block' : 'none';
 });
 
+// ── Live snapshot refresh — fetches a fresh camera JPEG every 5s and
+// swaps the hero image only on successful load (so a transient failure
+// doesn't flash a broken-image icon). Camera capture is cheap (~1.5s on
+// the Pi) but cycles take a few seconds; during the cycle's capture step
+// the snapshot endpoint blocks on a lock, so we just gracefully wait.
+const SNAPSHOT_REFRESH_MS = 5000;
+function refreshSnapshot() {
+  const heroImg = document.getElementById('hero-img');
+  if (heroImg) {
+    const probe = new Image();
+    probe.onload = () => {
+      heroImg.src = probe.src;
+      const live = document.getElementById('hero-time');
+      // Keep the small "live · last cycle …" label readable; the snapshot
+      // function itself doesn't change the label, render() owns it.
+    };
+    probe.onerror = () => { /* keep previous image */ };
+    probe.src = `/api/snapshot.jpg?t=${Date.now()}`;
+  }
+  setTimeout(refreshSnapshot, SNAPSHOT_REFRESH_MS);
+}
+
+// ── Live sensor polling ────────────────────────────────────────────────────
+const SENSOR_REFRESH_MS = 5000;
+
+async function refreshSensors() {
+  try {
+    const s = await api('GET', '/api/sensors');
+    const th = (window.__lastStatus && window.__lastStatus.thresholds) || {};
+
+    // Soil tile
+    const moistureBig = document.getElementById('tile-moisture-big');
+    const mb           = document.getElementById('tile-moisture-bar');
+    const moistureSub  = document.getElementById('tile-moisture-sub');
+    if (s.soil_available) {
+      const pct   = s.soil_pct;
+      const state = moistureState(pct, th);
+      moistureBig.innerHTML = pct != null
+        ? `${pct.toFixed(1)}<span class="unit">%</span>` : '—';
+      moistureBig.style.color = state.color;
+      mb.setAttribute('width', String(Math.max(0, Math.min(120, 1.2 * (pct || 0)))));
+      mb.setAttribute('fill', state.color);
+      // Only override the sub-text if we have a live value — keep the
+      // threshold range hint from render() when pct is null.
+      if (pct != null) {
+        moistureSub.textContent = `ADC ${s.soil_raw} · ${state.tone}`;
+      }
+      // Also update the status-strip dot colour
+      const dot = document.getElementById('nar-dot');
+      if (dot) {
+        dot.style.background = state.color;
+        dot.style.boxShadow  = `0 0 0 4px ${state.color}22`;
+      }
+      const narText = document.getElementById('nar-text');
+      if (narText) {
+        narText.innerHTML = `Soil is <em style="color:${state.color}">${state.tone}</em>.`;
+      }
+    }
+
+    // Temp tile
+    if (s.temp_celsius != null) {
+      const tempBig = document.getElementById('tile-temp-big');
+      tempBig.innerHTML = `${s.temp_celsius.toFixed(1)}<span class="unit">°C</span>`;
+      // sub-text (safe range) is set by render() — leave it alone
+    }
+
+    // Mirror into __lastStatus so render() doesn't overwrite with stale data
+    if (window.__lastStatus && window.__lastStatus.latest) {
+      if (s.soil_available && s.soil_pct != null) {
+        window.__lastStatus.latest.soil_pct = s.soil_pct;
+        window.__lastStatus.latest.soil_raw = s.soil_raw;
+      }
+      if (s.temp_celsius != null) {
+        window.__lastStatus.latest.temp_celsius = s.temp_celsius;
+      }
+    }
+  } catch (_) { /* silently ignore — render() has the last known values */ }
+  setTimeout(refreshSensors, SENSOR_REFRESH_MS);
+}
+
 // ── Boot ──
 refresh();
+refreshSnapshot();
+refreshSensors();
 </script>
 </body>
 </html>

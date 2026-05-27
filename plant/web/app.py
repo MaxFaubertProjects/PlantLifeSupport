@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 import yaml
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -58,6 +58,11 @@ class WateringRanges(BaseModel):
 
 class LightRanges(BaseModel):
     max_on_hours_per_day: Optional[float] = None
+
+
+class PromptsUpdateRequest(BaseModel):
+    vision: Optional[str] = None
+    reasoning_system: Optional[str] = None
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -110,6 +115,35 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         path.resolve().relative_to(photo_dir.resolve())
         return FileResponse(str(path))
 
+    # ── API: live snapshot ────────────────────────────────────────────────────
+
+    @app.get("/api/snapshot.jpg")
+    async def api_snapshot():
+        """Fresh camera JPEG for the dashboard's live-ish view.
+
+        Lower resolution than the cycle's official capture, no grow-light
+        flash. Camera access is locked, so if a cycle is in its capture
+        step this will wait a few seconds.
+        """
+        snap = getattr(hardware.camera, "snapshot", None)
+        if snap is None:
+            raise HTTPException(status_code=501, detail="snapshot not supported")
+        try:
+            jpeg = await asyncio.get_event_loop().run_in_executor(None, snap)
+        except Exception as exc:
+            log.warning("snapshot failed: %s", exc)
+            raise HTTPException(status_code=500, detail=f"snapshot failed: {exc}")
+        return Response(
+            content=jpeg,
+            media_type="image/jpeg",
+            headers={
+                # Aggressively prevent caching so the dashboard always
+                # sees the latest frame.
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
+
     # ── API: status ───────────────────────────────────────────────────────────
 
     @app.get("/api/status")
@@ -119,6 +153,10 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         db = control_loop.db
         latest = db.latest_cycle()
         light_on = hardware.light.is_on()
+        # Live valve state — True while a pulse is in flight (or while a
+        # manual override holds it open). Used by the dashboard's water
+        # button to toggle between "give a drink" and "stop pump".
+        pump_on = getattr(hardware.valve, "is_open", lambda: False)()
 
         cycle_state = dict(control_loop.cycle_state)
         nxt = cycle_state.get("next_cycle_at")
@@ -148,14 +186,25 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             "max_on_hours_per_day": light_cfg.get("max_on_hours_per_day", 16),
         }
 
+        # Which sensors are physically present. A driver advertises absence
+        # with `available = False` (e.g. NullSoilSensor); anything without
+        # the attribute is assumed present.
+        sensors = {
+            "soil":        getattr(hardware.soil, "available", True),
+            "temperature": getattr(hardware.temperature, "available", True),
+            "camera":      getattr(hardware.camera, "available", True),
+        }
+
         return {
             "mode": cfg.get("mode", "simulation"),
             "cycle_count": db.cycle_count(),
             "light_on": light_on,
+            "pump_on": pump_on,
             "latest": _cycle_to_dict(latest) if latest else None,
             "cycle_state": cycle_state,
             "plant": plant,
             "thresholds": thresholds,
+            "sensors": sensors,
         }
 
     # ── API: cycles (for charts + reasoning log) ──────────────────────────────
@@ -179,6 +228,16 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             None, hardware.valve.pulse, secs
         )
         return {"watered_seconds": secs}
+
+    # ── API: stop water (emergency / manual override) ───────────────────────
+    @app.post("/api/water/stop")
+    async def api_water_stop():
+        """Force the valve closed immediately. Interrupts any in-flight pulse
+        because the pulse() method's relay.off() at the end is idempotent —
+        the relay is already open by the time the sleep finishes."""
+        log.info("Manual water STOP requested")
+        hardware.valve.off()
+        return {"pump_on": False}
 
     # ── API: manual light ─────────────────────────────────────────────────────
 
@@ -290,6 +349,77 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
                 yaml.dump(to_write, f, default_flow_style=False, allow_unicode=True,
                           sort_keys=False)
 
+        return {"ok": True}
+
+    # ── API: live sensor read ─────────────────────────────────────────────────
+
+    @app.get("/api/sensors")
+    async def api_sensors() -> dict[str, Any]:
+        """Read soil and temperature sensors right now (not from the last cycle).
+
+        Runs the blocking hardware calls in a thread pool so the event loop
+        stays unblocked. Returns quickly — SPI read ~1 ms, 1-Wire ~1 s.
+        """
+        loop = asyncio.get_event_loop()
+
+        def _read():
+            soil_reading = hardware.soil.read() if getattr(hardware.soil, "available", True) else None
+            temp_reading = hardware.temperature.read()
+            return soil_reading, temp_reading
+
+        try:
+            soil_r, temp_r = await loop.run_in_executor(None, _read)
+        except Exception as exc:
+            log.warning("api_sensors: read error — %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        return {
+            "soil_available": getattr(hardware.soil, "available", True),
+            "soil_pct":       soil_r.moisture_pct if soil_r else None,
+            "soil_raw":       soil_r.raw if soil_r else None,
+            "temp_celsius":   round(temp_r.celsius, 2) if temp_r else None,
+        }
+
+    # ── API: prompt read/write ────────────────────────────────────────────────
+
+    @app.get("/api/prompts")
+    async def get_prompts() -> dict[str, Any]:
+        """Return the active prompts and their factory defaults."""
+        from plant.ai.prompts import (
+            get_vision_prompt, get_reasoning_system,
+            VISION_PROMPT_DEFAULT, REASONING_SYSTEM_DEFAULT,
+        )
+        return {
+            "vision":                   get_vision_prompt(cfg),
+            "reasoning_system":         get_reasoning_system(cfg),
+            "vision_default":           VISION_PROMPT_DEFAULT,
+            "reasoning_system_default": REASONING_SYSTEM_DEFAULT,
+        }
+
+    @app.post("/api/prompts")
+    async def post_prompts(req: PromptsUpdateRequest) -> dict[str, Any]:
+        """Update one or both prompts in memory and write back to config.yaml.
+
+        Pass an empty string to reset a prompt to its built-in default.
+        """
+        ai = cfg.setdefault("ai", {})
+        prompts = ai.setdefault("prompts", {})
+        if req.vision is not None:
+            # Empty string → delete override so the default kicks back in
+            prompts["vision"] = req.vision or None
+            log.info("Config: vision prompt %s",
+                     "reset to default" if not req.vision else "updated")
+        if req.reasoning_system is not None:
+            prompts["reasoning_system"] = req.reasoning_system or None
+            log.info("Config: reasoning system prompt %s",
+                     "reset to default" if not req.reasoning_system else "updated")
+
+        config_path = cfg.get("_config_path")
+        if config_path:
+            to_write = {k: v for k, v in cfg.items() if not k.startswith("_")}
+            with open(config_path, "w") as f:
+                yaml.dump(to_write, f, default_flow_style=False, allow_unicode=True,
+                          sort_keys=False)
         return {"ok": True}
 
     return app

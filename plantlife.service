@@ -1,0 +1,28 @@
+[Unit]
+Description=Plant Life Support — AI plant monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=maxpi
+WorkingDirectory=/home/maxpi/PlantLifeSupport
+ExecStart=/home/maxpi/PlantLifeSupport/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+
+# Give Ollama time to be reachable before the first AI cycle
+# (the control loop has its own timeout/fallback, so this is just a cushion)
+ExecStartPre=/bin/sleep 5
+
+# Allow uhubctl to run without a password prompt.
+# Make sure /etc/sudoers.d/uhubctl contains:
+#   maxpi ALL=(ALL) NOPASSWD: /usr/sbin/uhubctl
+# (the install step below does this automatically)
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=plantlife
+
+[Install]
+WantedBy=multi-user.target

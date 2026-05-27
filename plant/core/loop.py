@@ -98,15 +98,33 @@ class ControlLoop:
     def _run_cycle_inner(self) -> int:
         # 1. Sense
         self._set_stage("sensing")
-        soil = self.hardware.soil.read()
+        soil = self.hardware.soil.read()   # may be None — no sensor installed
         temp = self.hardware.temperature.read()
-        log.info("Sense: soil=%d ADC (%.1f%%), temp=%.1f°C",
-                 soil.raw, soil.moisture_pct, temp.celsius)
+        if soil is not None:
+            log.info("Sense: soil=%d ADC (%.1f%%), temp=%.1f°C",
+                     soil.raw, soil.moisture_pct, temp.celsius)
+        else:
+            log.info("Sense: soil=unavailable (no sensor), temp=%.1f°C", temp.celsius)
 
         # 2. See
         self._set_stage("capturing")
         photo_path = self._photo_path()
-        saved_path = self.hardware.camera.capture(photo_path)
+        # Briefly turn the grow light on while the camera captures so the
+        # photo is well-lit for the vision model. Restore whatever state
+        # the light was in before — the AI's own light decision (step 4)
+        # is the source of truth for the end of the cycle.
+        light_was_on = self.hardware.light.is_on()
+        self.hardware.light.set(True)
+        # Defensive: the shared 5V rail dips briefly when the light relay's
+        # coil energizes, and that transient has been observed to briefly
+        # trigger CH1 (the valve relay) on this HAT. Re-assert valve OFF
+        # immediately after activating the light to clear any spurious state.
+        self.hardware.valve.off()
+        try:
+            saved_path = self.hardware.camera.capture(photo_path)
+        finally:
+            self.hardware.light.set(light_was_on)
+            self.hardware.valve.off()   # again, after the light state restore
 
         # 3. Describe
         self._set_stage("describing")
@@ -143,8 +161,8 @@ class ControlLoop:
 
         # 7. Record
         cycle_id = self._db.insert_cycle(
-            soil_raw=soil.raw,
-            soil_pct=soil.moisture_pct,
+            soil_raw=soil.raw if soil is not None else None,
+            soil_pct=soil.moisture_pct if soil is not None else None,
             temp_celsius=temp.celsius,
             photo_path=saved_path,
             plant_description=description,

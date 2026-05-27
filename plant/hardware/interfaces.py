@@ -34,10 +34,15 @@ class TemperatureReading:
 
 @runtime_checkable
 class SoilSensor(Protocol):
-    """Reads soil moisture from the MCP3008 ADC over SPI."""
+    """Reads soil moisture from the MCP3008 ADC over SPI.
 
-    def read(self) -> SoilReading:
-        """Return the current soil moisture reading."""
+    ``read()`` may return ``None`` when no soil sensor is installed.
+    Every caller must treat soil moisture as optional — the system runs
+    fine without it, just with less information for the AI to reason on.
+    """
+
+    def read(self) -> SoilReading | None:
+        """Return the current soil moisture reading, or None if unavailable."""
         ...
 
 
@@ -58,6 +63,15 @@ class Camera(Protocol):
         """Capture a photo, save it to *path*, and return the saved path."""
         ...
 
+    def snapshot(self) -> bytes:
+        """Return a fresh JPEG (bytes) for the dashboard's live view.
+
+        Lower-resolution / lower-quality than :meth:`capture` to keep
+        repeated polling cheap, and does NOT trigger the grow-light flash
+        — that's reserved for the cycle's official capture only.
+        """
+        ...
+
 
 @runtime_checkable
 class ValveActuator(Protocol):
@@ -65,6 +79,16 @@ class ValveActuator(Protocol):
 
     def pulse(self, seconds: float) -> None:
         """Open the valve for *seconds*, then close it."""
+        ...
+
+    def off(self) -> None:
+        """Force the valve closed (defensive — called at startup and around
+        operations that energize other relays on the same HAT to ensure CH1
+        is never accidentally left/triggered on)."""
+        ...
+
+    def is_open(self) -> bool:
+        """Return True if the valve is currently open (water flowing)."""
         ...
 
 

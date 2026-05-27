@@ -39,6 +39,14 @@ async def main(config_path: str | None = None) -> None:
 
     hardware = get_hardware(cfg)
 
+    # Defensive: force both actuators OFF immediately after hardware init.
+    # gpiozero's `initial_value=False` should already set them low, but
+    # rail dips or HAT-level glitches during pin claim can briefly trigger
+    # neighboring relays. This explicit reset is cheap insurance.
+    hardware.valve.off()
+    hardware.light.set(False)
+    log.info("Startup: valve + light forced OFF")
+
     loop = ControlLoop(cfg=cfg, hardware=hardware)
     app = create_app(cfg=cfg, hardware=hardware, control_loop=loop)
 

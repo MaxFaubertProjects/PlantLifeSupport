@@ -33,7 +33,7 @@ class ReasoningClient:
 
     def decide(
         self,
-        soil: SoilReading,
+        soil: SoilReading | None,
         temp: TemperatureReading,
         plant_description: str,
         recent_cycles: list,
@@ -41,7 +41,7 @@ class ReasoningClient:
         """Ask the LLM to make a care decision.
 
         Args:
-            soil: Current soil reading.
+            soil: Current soil reading, or None if no soil sensor is installed.
             temp: Current temperature reading.
             plant_description: VLM text description of the plant photo.
             recent_cycles: Recent Cycle objects from the database (newest first).
@@ -64,8 +64,17 @@ class ReasoningClient:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                format=Decision.model_json_schema(),  # constrain decoding to schema
-                options={"temperature": 0.2},   # low temp → consistent JSON
+                # format="json" tells Ollama to force valid JSON output without
+                # constraining every token to a strict schema. For a small model
+                # like llama3.2:3b this gives reliably parseable output with less
+                # chance of stilted/incomplete generations than full schema-
+                # constrained decoding (format=Decision.model_json_schema()).
+                # Pydantic still validates the structure on our end after decoding.
+                format="json",
+                options={
+                    "temperature": 0.2,   # low temp → consistent JSON
+                    "num_ctx": 2048,      # small KV cache — our prompts are short
+                },
             )
             raw = resp.message.content.strip()
             log.debug("ReasoningClient: raw response: %s", raw)
@@ -98,7 +107,7 @@ class ReasoningClient:
             return self._rule_fallback(soil, temp, reason=f"Ollama unavailable: {exc}"), True
 
     def _rule_fallback(
-        self, soil: SoilReading, temp: TemperatureReading, reason: str
+        self, soil: SoilReading | None, temp: TemperatureReading, reason: str
     ) -> Decision:
         """Import rules lazily to avoid a circular dependency."""
         from plant.core.rules import rule_based_decision
