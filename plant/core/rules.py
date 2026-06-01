@@ -40,26 +40,27 @@ def rule_based_decision(
     too_cold = temp_cfg["too_cold_celsius"]
     too_hot = temp_cfg["too_hot_celsius"]
 
-    # Decide watering
+    # Decide watering. water_secs is a float — max_pulse can be sub-second
+    # (e.g. during pump-rate calibration) and must not get truncated.
     if soil is None:
         water = False
-        water_secs = 0
+        water_secs = 0.0
         reason_water = "no soil sensor — cannot verify moisture, skipping water"
     elif temp.celsius > too_hot:
         water = False
-        water_secs = 0
+        water_secs = 0.0
         reason_water = f"too hot ({temp.celsius:.1f}°C > {too_hot}°C) — skipping water"
     elif soil.raw < wet_threshold:
         water = False
-        water_secs = 0
+        water_secs = 0.0
         reason_water = f"soil already moist (ADC {soil.raw} < {wet_threshold})"
     elif soil.raw > dry_threshold:
         water = True
-        water_secs = max_pulse
-        reason_water = f"soil dry (ADC {soil.raw} > {dry_threshold}) — watering {max_pulse}s"
+        water_secs = float(max_pulse)
+        reason_water = f"soil dry (ADC {soil.raw} > {dry_threshold}) — watering {water_secs:.1f}s"
     else:
         water = False
-        water_secs = 0
+        water_secs = 0.0
         reason_water = f"soil in acceptable range (ADC {soil.raw})"
 
     # Decide light
@@ -81,7 +82,7 @@ def rule_based_decision(
         f"{reason_water}. {reason_light}."
     )
 
-    log.info("RuleFallback: water=%s (%ds), light=%s", water, water_secs, light_on)
+    log.info("RuleFallback: water=%s (%.1fs), light=%s", water, water_secs, light_on)
     return Decision(
         water=water,
         water_seconds=water_secs,

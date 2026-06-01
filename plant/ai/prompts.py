@@ -33,7 +33,7 @@ grow light on. You must reply with valid JSON matching this exact schema:
 
 {
   "water": <true|false>,
-  "water_seconds": <integer 0–60>,
+  "water_seconds": <number 0–60, may be fractional like 0.5>,
   "light_on": <true|false>,
   "reasoning": "<1–3 sentence plain-English explanation>"
 }

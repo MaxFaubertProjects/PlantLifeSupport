@@ -37,7 +37,7 @@ def _build_soil_sensor(cfg: dict):
 
     from plant.hardware.real import RealSoilSensor
     log.info("Soil sensor: mcp3008 (SPI ADC)")
-    return RealSoilSensor()
+    return RealSoilSensor(cfg)
 
 
 def _build_light_actuator(cfg: dict):
@@ -81,6 +81,14 @@ def get_hardware(cfg: dict) -> Hardware:
         log.info("Hardware mode: SIMULATION (mock drivers)")
         return build_mock_hardware(cfg)
 
+    # Shared kwargs for RealCamera — picked up from the optional `camera:`
+    # section in config.yaml. Defaults match the original hardcoded values.
+    cam_cfg = cfg.get("camera", {}) or {}
+    cam_kwargs = {
+        "settle_seconds":          float(cam_cfg.get("settle_seconds", 2.0)),
+        "snapshot_settle_seconds": float(cam_cfg.get("snapshot_settle_seconds", 1.0)),
+    }
+
     if mode == "hardware":
         from plant.hardware.real import (
             RealTemperatureSensor, RealCamera, RealValveActuator,
@@ -90,7 +98,7 @@ def get_hardware(cfg: dict) -> Hardware:
         return Hardware(
             soil=_build_soil_sensor(cfg),
             temperature=RealTemperatureSensor(),
-            camera=RealCamera(),
+            camera=RealCamera(**cam_kwargs),
             valve=RealValveActuator(gpio_pin=gpio["valve_gpio"]),
             light=_build_light_actuator(cfg),
         )
@@ -110,7 +118,7 @@ def get_hardware(cfg: dict) -> Hardware:
         return Hardware(
             soil=soil,
             temperature=RealTemperatureSensor(),
-            camera=RealCamera(),
+            camera=RealCamera(**cam_kwargs),
             valve=MockValveActuator(soil_sensor=sim_soil),
             light=light,
         )

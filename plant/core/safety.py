@@ -106,12 +106,18 @@ def apply_safety(
     else:
         reasoning = proposed.reasoning
 
-    if not water:
-        water_seconds = 0
+    # Final coherence pass: water and water_seconds must agree. A "water=True
+    # with 0s duration" combination is the worst kind of bug — it briefly
+    # clicks the relay (audible, visible on the dashboard, recorded as a
+    # watering event) without actually delivering anything. Treat any
+    # non-positive duration as an explicit no-water decision.
+    if not water or water_seconds <= 0:
+        water = False
+        water_seconds = 0.0
 
     return Decision(
         water=water,
-        water_seconds=water_seconds,
+        water_seconds=float(water_seconds),
         light_on=light_on,
         reasoning=reasoning,
     )

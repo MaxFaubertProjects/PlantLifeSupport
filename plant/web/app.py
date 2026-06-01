@@ -74,12 +74,24 @@ class ConfigUpdateRequest(BaseModel):
     light: Optional[LightRanges] = None
 
 
-def _adc_to_pct(adc: int) -> float:
-    return round((1023 - adc) / 1023 * 100, 1)
+def _adc_to_pct(adc: int, cal_dry: int = 1023, cal_wet: int = 0) -> float:
+    """Convert a raw ADC reading to moisture % using calibration endpoints.
+
+    ``cal_dry`` is the raw ADC reading in completely dry air;
+    ``cal_wet`` is the raw reading fully submerged in water.
+    Defaults (1023 / 0) reproduce the old full-range behaviour so this
+    is backward-compatible with configs that have no cal values.
+    """
+    span = cal_dry - cal_wet
+    if span <= 0:
+        return 0.0
+    return round(max(0.0, min(100.0, (cal_dry - adc) / span * 100)), 1)
 
 
-def _pct_to_adc(pct: float) -> int:
-    return max(0, min(1023, round(1023 * (1 - pct / 100))))
+def _pct_to_adc(pct: float, cal_dry: int = 1023, cal_wet: int = 0) -> int:
+    """Convert a moisture % back to a raw ADC threshold value."""
+    adc = cal_dry - (pct / 100) * (cal_dry - cal_wet)
+    return max(0, min(1023, round(adc)))
 
 log = logging.getLogger(__name__)
 
@@ -176,9 +188,11 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         temp_cfg  = cfg.get("temperature", {})
         water_cfg = cfg.get("watering", {})
         light_cfg = cfg.get("light", {})
+        cal_dry = int(soil_cfg.get("cal_dry", 1023))
+        cal_wet = int(soil_cfg.get("cal_wet", 0))
         thresholds = {
-            "dry_pct":              _adc_to_pct(soil_cfg.get("dry_threshold", 700)),
-            "wet_pct":              _adc_to_pct(soil_cfg.get("wet_threshold", 400)),
+            "dry_pct":              _adc_to_pct(soil_cfg.get("dry_threshold", 700), cal_dry, cal_wet),
+            "wet_pct":              _adc_to_pct(soil_cfg.get("wet_threshold", 400), cal_dry, cal_wet),
             "too_cold_celsius":     temp_cfg.get("too_cold_celsius", 15.0),
             "too_hot_celsius":      temp_cfg.get("too_hot_celsius", 32.0),
             "max_pulse_seconds":    water_cfg.get("max_pulse_seconds", 8),
@@ -216,6 +230,45 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         db = control_loop.db
         return [_cycle_to_dict(c) for c in db.recent_cycles(limit=limit)]
 
+    # ── API: clear history (destructive!) ─────────────────────────────────────
+
+    @app.delete("/api/cycles")
+    async def api_cycles_clear() -> dict[str, Any]:
+        """Wipe every recorded cycle and delete all stored photos.
+
+        Irreversible. The UI button that calls this is gated by a JS
+        confirm() dialog. We refuse to clear while a cycle is mid-flight,
+        because that cycle is about to write a row and we'd be racing it.
+        """
+        if control_loop.cycle_state.get("stage") not in (None, "idle"):
+            raise HTTPException(
+                status_code=409,
+                detail="cannot clear history while a cycle is running",
+            )
+        db = control_loop.db
+        removed = db.clear_cycles()
+
+        # Best-effort photo cleanup — only JPG/PNG inside the configured
+        # photo_dir, never traverse symlinks, never reach outside the dir.
+        photos_removed = 0
+        photo_dir = Path(cfg["storage"]["photo_dir"]).resolve()
+        if photo_dir.exists() and photo_dir.is_dir():
+            for p in photo_dir.iterdir():
+                if not p.is_file():
+                    continue
+                if p.suffix.lower() not in {".jpg", ".jpeg", ".png"}:
+                    continue
+                try:
+                    p.unlink()
+                    photos_removed += 1
+                except OSError as exc:
+                    log.warning("clear history: failed to delete %s — %s", p, exc)
+        log.info(
+            "Clear history: %d cycles + %d photos removed",
+            removed, photos_removed,
+        )
+        return {"cycles_removed": removed, "photos_removed": photos_removed}
+
     # ── API: manual water ─────────────────────────────────────────────────────
 
     @app.post("/api/water")
@@ -243,9 +296,17 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
 
     @app.post("/api/light")
     async def api_light(req: LightRequest):
-        """Set the grow light on or off."""
+        """Set the grow light on or off.
+
+        Defensively re-asserts the valve OFF immediately afterwards: the
+        light relay's coil inrush briefly dips the shared 5V rail and has
+        been observed to spuriously latch the valve relay closed on this
+        HAT (same crosstalk the control loop already guards against during
+        its capture step).
+        """
         log.info("Manual light: %s", "ON" if req.on else "OFF")
         hardware.light.set(req.on)
+        hardware.valve.off()
         return {"light_on": req.on}
 
     # ── API: trigger a cycle now ──────────────────────────────────────────────
@@ -278,8 +339,16 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
                 "species_notes": plant.get("species_notes", ""),
             },
             "soil": {
-                "dry_pct": _adc_to_pct(soil.get("dry_threshold", 700)),
-                "wet_pct": _adc_to_pct(soil.get("wet_threshold", 400)),
+                "dry_pct": _adc_to_pct(
+                    soil.get("dry_threshold", 700),
+                    int(soil.get("cal_dry", 1023)),
+                    int(soil.get("cal_wet", 0)),
+                ),
+                "wet_pct": _adc_to_pct(
+                    soil.get("wet_threshold", 400),
+                    int(soil.get("cal_dry", 1023)),
+                    int(soil.get("cal_wet", 0)),
+                ),
             },
             "temperature": {
                 "too_cold_celsius": temp.get("too_cold_celsius", 15.0),
@@ -314,10 +383,12 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
 
         if req.soil is not None:
             soil = cfg.setdefault("soil", {})
+            _cal_dry = int(soil.get("cal_dry", 1023))
+            _cal_wet = int(soil.get("cal_wet", 0))
             if req.soil.dry_pct is not None:
-                soil["dry_threshold"] = _pct_to_adc(req.soil.dry_pct)
+                soil["dry_threshold"] = _pct_to_adc(req.soil.dry_pct, _cal_dry, _cal_wet)
             if req.soil.wet_pct is not None:
-                soil["wet_threshold"] = _pct_to_adc(req.soil.wet_pct)
+                soil["wet_threshold"] = _pct_to_adc(req.soil.wet_pct, _cal_dry, _cal_wet)
             log.info("Config: soil thresholds updated")
 
         if req.temperature is not None:
@@ -373,11 +444,14 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             log.warning("api_sensors: read error — %s", exc)
             raise HTTPException(status_code=500, detail=str(exc))
 
+        soil_cfg = cfg.get("soil", {})
         return {
             "soil_available": getattr(hardware.soil, "available", True),
             "soil_pct":       soil_r.moisture_pct if soil_r else None,
             "soil_raw":       soil_r.raw if soil_r else None,
             "temp_celsius":   round(temp_r.celsius, 2) if temp_r else None,
+            "cal_dry":        int(soil_cfg.get("cal_dry", 1023)),
+            "cal_wet":        int(soil_cfg.get("cal_wet", 0)),
         }
 
     # ── API: prompt read/write ────────────────────────────────────────────────
@@ -448,4 +522,6 @@ def _cycle_to_dict(c) -> dict[str, Any]:
         "final_water": c.final_water,
         "final_water_secs": c.final_water_secs,
         "final_light_on": c.final_light_on,
+        "vision_ms": c.vision_ms,
+        "reasoning_ms": c.reasoning_ms,
     }

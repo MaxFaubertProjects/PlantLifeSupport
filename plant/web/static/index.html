@@ -196,8 +196,12 @@
     }
     .tile.running {
       animation: cycle-pulse 1.6s ease-in-out infinite;
-      border-color: var(--accent);
+      background: var(--accent); border-color: var(--accent);
     }
+    .tile.running .label { color: rgba(255,255,255,.65); }
+    .tile.running .big   { color: #fff !important; }
+    .tile.running .big .unit { color: rgba(255,255,255,.75); }
+    .tile.running .sub   { color: rgba(255,255,255,.75); }
     .big {
       font-family: "Newsreader", serif; font-size: 32px; line-height: 1;
       font-weight: 400; letter-spacing: -0.01em;
@@ -334,13 +338,47 @@
                     0 0 0 10px rgba(122,154,90,0);
       }
     }
+    /* Light button — active (lamp is on) */
+    .softbtn.light.active {
+      background: var(--amber); color: #fff; border-color: var(--amber);
+      box-shadow: 0 4px 12px rgba(196,146,74,.25);
+      animation: light-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes light-pulse {
+      0%, 100% {
+        box-shadow: 0 4px 12px rgba(196,146,74,.25),
+                    0 0 0 0 rgba(196,146,74,.45);
+      }
+      50% {
+        box-shadow: 0 4px 16px rgba(196,146,74,.40),
+                    0 0 0 10px rgba(196,146,74,0);
+      }
+    }
+    /* Water/pump button — active (pump is running) */
+    .softbtn.water.active {
+      background: var(--blue); color: #fff; border-color: var(--blue);
+      box-shadow: 0 4px 12px rgba(106,138,170,.25);
+      animation: water-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes water-pulse {
+      0%, 100% {
+        box-shadow: 0 4px 12px rgba(106,138,170,.25),
+                    0 0 0 0 rgba(106,138,170,.45);
+      }
+      50% {
+        box-shadow: 0 4px 16px rgba(106,138,170,.40),
+                    0 0 0 10px rgba(106,138,170,0);
+      }
+    }
     .softbtn-badge {
       width: 36px; height: 36px; border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
       font-size: 18px;
     }
     .softbtn.water .softbtn-badge { background: rgba(106,138,170,.08); color: var(--blue); }
+    .softbtn.water.active .softbtn-badge { background: rgba(255,255,255,.2); color: #fff; }
     .softbtn.light .softbtn-badge { background: rgba(196,146,74,.08); color: var(--amber); }
+    .softbtn.light.active .softbtn-badge { background: rgba(255,255,255,.2); color: #fff; }
     .softbtn.cycle .softbtn-badge { background: rgba(255,255,255,.2); color: #fff; }
     .softbtn-text { flex: 1; }
     .softbtn-label { font-size: 15px; font-weight: 600; line-height: 1.1; }
@@ -349,6 +387,10 @@
       font-style: italic; font-family: "Newsreader", serif;
     }
     .softbtn.cycle .softbtn-sub { opacity: .85; color: #fff; }
+    .softbtn.light.active .softbtn-sub,
+    .softbtn.water.active .softbtn-sub { opacity: .85; color: #fff; }
+    .softbtn.light.active .softbtn-label,
+    .softbtn.water.active .softbtn-label { color: #fff; }
 
     /* Toast */
     #toast {
@@ -467,12 +509,26 @@
     .cfg-reset-btn:hover { color: var(--ink); border-color: var(--muted); }
     /* History tab */
     .h-row {
-      padding: 14px 0; border-bottom: 1px solid var(--line);
-      display: flex; gap: 16px;
+      padding: 16px 0; border-bottom: 1px solid var(--line);
+      display: flex; gap: 18px; align-items: flex-start;
     }
     .h-row:last-child { border-bottom: none; }
+    .h-thumb {
+      flex-shrink: 0; width: 96px; height: 96px;
+      border-radius: 10px; background: var(--line);
+      object-fit: cover; cursor: pointer;
+      transition: transform .12s, box-shadow .12s;
+    }
+    .h-thumb:hover { transform: scale(1.04); box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+    .h-thumb-placeholder {
+      flex-shrink: 0; width: 96px; height: 96px;
+      border-radius: 10px; background: var(--line);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 11px; font-style: italic;
+      font-family: "Newsreader", serif;
+    }
     .h-meta {
-      flex-shrink: 0; width: 100px;
+      flex-shrink: 0; width: 120px;
       display: flex; flex-direction: column; gap: 6px;
     }
     .h-time {
@@ -480,14 +536,78 @@
       color: var(--muted); font-style: italic;
     }
     .h-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+    .h-body {
+      flex: 1; display: flex; flex-direction: column; gap: 8px;
+      min-width: 0;
+    }
+    .h-sensors {
+      display: flex; gap: 14px; font-size: 12px;
+      font-family: "DM Mono", monospace; color: var(--muted);
+    }
+    .h-sensor-val { color: var(--ink); }
     .h-text {
-      flex: 1; font-size: 13px; color: var(--ink); line-height: 1.5;
+      font-size: 13px; color: var(--ink); line-height: 1.5;
+    }
+    .h-fallback, .h-aibadge {
+      display: inline-block; font-size: 10px; font-weight: 600;
+      border-radius: 4px; padding: 1px 5px; margin-bottom: 4px;
+      letter-spacing: .04em; text-transform: uppercase;
     }
     .h-fallback {
-      display: inline-block; font-size: 10px; font-weight: 600;
       color: var(--warn); background: rgba(196,146,74,.08);
-      border: 1px solid rgba(196,146,74,.2); border-radius: 4px;
-      padding: 1px 5px; margin-bottom: 4px; letter-spacing: .04em;
+      border: 1px solid rgba(196,146,74,.2);
+    }
+    .h-aibadge {
+      color: var(--accent); background: rgba(122,154,90,.08);
+      border: 1px solid rgba(122,154,90,.3);
+    }
+    .h-latency {
+      font-family: "DM Mono", monospace; font-size: 11px;
+      color: var(--muted);
+    }
+    .h-latency b { color: var(--ink); font-weight: 600; }
+    .h-action {
+      font-size: 11px; color: var(--muted); font-style: italic;
+      font-family: "Newsreader", serif;
+    }
+    .h-action b { color: var(--ink); font-style: normal; font-weight: 600; }
+    /* Summary strip at the top of the history list */
+    .h-summary {
+      display: flex; flex-wrap: wrap; gap: 10px;
+      padding: 14px 16px; margin-bottom: 6px;
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    .h-stat {
+      display: flex; flex-direction: column; gap: 2px;
+      padding: 0 14px 0 0; min-width: 90px;
+    }
+    .h-stat + .h-stat { border-left: 1px solid var(--line); padding-left: 14px; }
+    .h-stat-label {
+      font-size: 10px; color: var(--muted); text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    .h-stat-val {
+      font-family: "DM Mono", monospace; font-size: 14px;
+      color: var(--ink); font-weight: 600;
+    }
+    .h-stat-sub {
+      font-size: 10px; color: var(--muted); font-family: "Newsreader", serif;
+      font-style: italic;
+    }
+    .h-clear-btn {
+      font-size: 12px; color: var(--warn);
+      background: none; border: 1px solid rgba(196,146,74,.4);
+      border-radius: 6px; padding: 6px 14px; cursor: pointer;
+      font-family: inherit;
+      transition: background .12s, color .12s, border-color .12s;
+    }
+    .h-clear-btn:hover {
+      background: rgba(196,146,74,.10);
+      border-color: var(--warn); color: var(--warn);
+    }
+    .h-clear-btn:disabled {
+      opacity: .5; cursor: not-allowed;
     }
     /* Slider fields */
     .cfg-slider-field { margin-bottom: 24px; }
@@ -619,7 +739,7 @@
             <div class="label">Next cycle</div>
             <div class="big" id="tile-next-big">—</div>
             <svg viewBox="0 0 120 6" preserveAspectRatio="none" style="width:100%;height:6px">
-              <rect x="0" y="2" width="120" height="2" fill="var(--line)" rx="1"/>
+              <rect id="tile-next-track" x="0" y="2" width="120" height="2" fill="var(--line)" rx="1"/>
               <rect id="tile-next-bar" x="0" y="1.5" width="0" height="3" fill="var(--accent)" rx="1.5"/>
             </svg>
             <div class="sub" id="tile-next-sub">—</div>
@@ -765,6 +885,43 @@
               the AI's <em>preferences</em>, edit the care notes in the Plant tab.
             </p>
 
+            <!-- Live sensor debug — raw ADC readout for calibration/wiring -->
+            <div class="cfg-ranges-group" id="dbg-panel" style="background:#0f1419;border:1px solid #1f2933;border-radius:12px;padding:16px 18px;margin-bottom:24px">
+              <div class="cfg-ranges-title" style="display:flex;align-items:center;gap:8px;color:#9fb4c7">
+                <span id="dbg-led" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#555;box-shadow:0 0 0 3px #5552"></span>
+                🔧 Live soil sensor — raw debug
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:14px 0 6px">
+                <div>
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#5f7488">Raw ADC</div>
+                  <div id="dbg-raw" style="font-size:30px;font-weight:700;color:#e6edf3;font-variant-numeric:tabular-nums;line-height:1.1">—</div>
+                  <div style="font-size:11px;color:#5f7488">of 1023</div>
+                </div>
+                <div>
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#5f7488">Est. voltage</div>
+                  <div id="dbg-volt" style="font-size:30px;font-weight:700;color:#e6edf3;font-variant-numeric:tabular-nums;line-height:1.1">—</div>
+                  <div style="font-size:11px;color:#5f7488">@ 3.3V ref</div>
+                </div>
+                <div>
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#5f7488">Moisture</div>
+                  <div id="dbg-pct" style="font-size:30px;font-weight:700;color:#e6edf3;font-variant-numeric:tabular-nums;line-height:1.1">—</div>
+                  <div style="font-size:11px;color:#5f7488">calibrated</div>
+                </div>
+              </div>
+              <!-- raw ADC bar 0..1023 -->
+              <div style="height:8px;background:#1f2933;border-radius:4px;overflow:hidden;margin:10px 0 4px">
+                <div id="dbg-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#3b82f6,#f59e0b);transition:width .3s"></div>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:#5f7488">
+                <span>0 (wet)</span><span>1023 (dry)</span>
+              </div>
+              <div id="dbg-status" style="font-size:12px;color:#7a8ca0;margin-top:10px">Open this panel to start live polling…</div>
+              <div style="font-size:11px;color:#5f7488;margin-top:6px">
+                Calibration: <span id="dbg-cal">cal_dry=? / cal_wet=?</span> ·
+                updates every 1s while this tab is open
+              </div>
+            </div>
+
             <div class="cfg-ranges-group">
               <div class="cfg-ranges-title">💧 Soil moisture</div>
               <div class="cfg-slider-field">
@@ -772,7 +929,7 @@
                   <label class="cfg-label">Water below</label>
                   <span class="cfg-slider-val" id="cfg-soil-dry-val">—</span>
                 </div>
-                <input type="range" min="10" max="60" step="1" id="cfg-soil-dry" class="cfg-slider">
+                <input type="range" min="0" max="60" step="1" id="cfg-soil-dry" class="cfg-slider">
                 <p class="cfg-hint">The AI considers watering when moisture drops under this level.</p>
               </div>
               <div class="cfg-slider-field">
@@ -780,7 +937,7 @@
                   <label class="cfg-label">Already wet above</label>
                   <span class="cfg-slider-val" id="cfg-soil-wet-val">—</span>
                 </div>
-                <input type="range" min="40" max="90" step="1" id="cfg-soil-wet" class="cfg-slider">
+                <input type="range" min="1" max="90" step="1" id="cfg-soil-wet" class="cfg-slider">
                 <p class="cfg-hint">Watering is overridden OFF when moisture is above this — prevents root rot.</p>
               </div>
             </div>
@@ -812,7 +969,7 @@
                   <label class="cfg-label">Max pulse</label>
                   <span class="cfg-slider-val" id="cfg-water-max-val">—</span>
                 </div>
-                <input type="range" min="1" max="30" step="0.5" id="cfg-water-max" class="cfg-slider">
+                <input type="range" min="0.5" max="30" step="0.5" id="cfg-water-max" class="cfg-slider">
                 <p class="cfg-hint">Hard cap on how long the valve can open in a single watering.</p>
               </div>
               <div class="cfg-slider-field">
@@ -873,6 +1030,11 @@
 
         <!-- History -->
         <div id="tab-history" class="cfg-tab-content">
+          <div id="history-header" style="max-width:900px;display:flex;justify-content:flex-end;margin-bottom:12px">
+            <button class="h-clear-btn" id="history-clear-btn" onclick="clearHistory()">
+              Clear history
+            </button>
+          </div>
           <div id="history-list" style="max-width:900px"></div>
         </div>
 
@@ -972,7 +1134,17 @@ function render(status, cycles) {
   if (!status) return false;
 
   const latest = status.latest;
-  const pct = latest ? latest.soil_pct : null;
+  // Prefer the live sensor reading (polled by refreshSensors into __liveSoil)
+  // over the last DB cycle. Cycles recorded while the sensor was being wired
+  // can hold stale values (e.g. raw 0 → 100%) that would otherwise override
+  // the correct live reading each time render() runs.
+  const live = window.__liveSoil;
+  const pct = (live && live.pct != null)
+    ? live.pct
+    : (latest ? latest.soil_pct : null);
+  const liveRaw = (live && live.raw != null)
+    ? live.raw
+    : (latest ? latest.soil_raw : null);
   const state = moistureState(pct, status.thresholds);
   const th = status.thresholds || {};
   // A soil sensor reports `available: false` when none is wired up.
@@ -1090,10 +1262,12 @@ function render(status, cycles) {
   // ── Reasoning ──
   renderReasoning(cycles);
 
-  // ── Light button label ──
-  document.getElementById('light-btn-label').textContent = lightOn ? 'Light off' : 'Light on';
+  // ── Light button ──
+  const lightBtn = document.getElementById('light-btn');
+  lightBtn.classList.toggle('active', lightOn);
+  document.getElementById('light-btn-label').textContent = lightOn ? 'Turn off light' : 'Turn on light';
   document.getElementById('light-btn-sub').textContent =
-    lightOn ? 'kill the lamp' : 'engage the lamp';
+    lightOn ? 'lamp is on — tap to kill' : 'engage the lamp';
 
   // ── Water/pump button — reflects live valve state ──
   pumpOn = !!status.pump_on;
@@ -1101,18 +1275,18 @@ function render(status, cycles) {
   const waterLabel = document.getElementById('water-btn-label');
   const waterSub = document.getElementById('water-btn-sub');
   const waterBadge = document.getElementById('water-btn-badge');
+  waterBtn.classList.toggle('active', pumpOn);
   if (pumpOn) {
     waterLabel.textContent = 'Stop pump';
-    waterSub.textContent = 'cut the flow';
+    waterSub.textContent = 'pump running — tap to stop';
     waterBadge.textContent = '■';
-    waterBtn.style.borderColor = T.warn;
-    waterBtn.style.background = `linear-gradient(180deg, ${T.warn}22, ${T.warn}11)`;
   } else {
-    waterLabel.textContent = 'Water 3s';
+    // Show the actual pulse length the server will deliver — the manual
+    // water button sends max_pulse_seconds (capped in /api/water).
+    const pulse = th.max_pulse_seconds != null ? th.max_pulse_seconds : 3;
+    waterLabel.textContent = `Water ${pulse}s`;
     waterSub.textContent = 'give a drink';
     waterBadge.textContent = '💧';
-    waterBtn.style.borderColor = '';
-    waterBtn.style.background = '';
   }
 
   // Whether a cycle is mid-flight (used to toggle banner button + poll cadence)
@@ -1191,10 +1365,11 @@ function computeEta() {
 }
 
 function renderNextCycleTile() {
-  const big = document.getElementById('tile-next-big');
-  const bar = document.getElementById('tile-next-bar');
-  const sub = document.getElementById('tile-next-sub');
-  const tile = big.closest('.tile');
+  const big   = document.getElementById('tile-next-big');
+  const track = document.getElementById('tile-next-track');
+  const bar   = document.getElementById('tile-next-bar');
+  const sub   = document.getElementById('tile-next-sub');
+  const tile  = big.closest('.tile');
   const stage = (window.__lastStatus && window.__lastStatus.cycle_state.stage) || 'idle';
   const running = stage !== 'idle' && stage !== 'starting';
 
@@ -1202,15 +1377,21 @@ function renderNextCycleTile() {
 
   if (running) {
     big.innerHTML = `Now<span class="unit"> running</span>`;
-    big.style.color = T.accent;
+    big.style.color = '';          // CSS .tile.running .big handles white
+    track.setAttribute('fill', 'rgba(255,255,255,.2)');
     bar.setAttribute('width', '120');
-    bar.setAttribute('fill', T.accent);
+    bar.setAttribute('fill', 'rgba(255,255,255,.55)');
     sub.textContent = stage + '…';
     return;
   }
+  // Restore bar colours when not running
+  track.setAttribute('fill', 'var(--line)');
+  bar.setAttribute('fill', T.accent);
+
   const eta = computeEta();
   if (eta == null) {
-    big.textContent = '—'; bar.setAttribute('width', '0'); sub.textContent = '—';
+    big.textContent = '—'; big.style.color = '';
+    bar.setAttribute('width', '0'); sub.textContent = '—';
     return;
   }
   const m = Math.floor(eta / 60), s = eta % 60;
@@ -1219,7 +1400,6 @@ function renderNextCycleTile() {
   const interval = 3600;
   const frac = Math.max(0, Math.min(1, 1 - eta / interval));
   bar.setAttribute('width', String(120 * frac));
-  bar.setAttribute('fill', T.accent);
   sub.textContent = `Every hour · scheduled`;
 }
 
@@ -1544,7 +1724,12 @@ async function manualWater() {
     // Fire and refresh immediately so the button flips to "Stop pump" while
     // the 3s pulse is in flight. The /api/water request itself blocks for
     // the full duration; the early refresh shows live state.
-    const promise = api('POST', '/api/water', { seconds: 3 });
+    // Ask for the configured cap; the server clamps anyway, but this keeps
+    // the request honest and avoids a misleading "Watered for 0.5s" toast
+    // when the user clicked a button labelled "Water 0.5s".
+    const cap = (window.__lastStatus && window.__lastStatus.thresholds &&
+                 window.__lastStatus.thresholds.max_pulse_seconds) || 3;
+    const promise = api('POST', '/api/water', { seconds: cap });
     setTimeout(refresh, 200);
     const r = await promise;
     toast(`💧 Watered for ${r.watered_seconds}s`);
@@ -1596,6 +1781,7 @@ function openCfg() {
 function closeCfg() {
   cfgOpen = false;
   document.getElementById('cfg-overlay').classList.add('hidden');
+  stopDebugPolling();
 }
 
 function switchTab(name) {
@@ -1610,6 +1796,59 @@ function switchTab(name) {
   });
   if (name === 'history') renderHistory();
   if (name === 'prompt')  renderPromptTab();
+  if (name === 'ranges')  startDebugPolling();
+  else                    stopDebugPolling();
+}
+
+// ── Live raw-ADC debug widget (Safety limits tab) ───────────────────────────
+let _dbgTimer = null;
+async function pollDebug() {
+  try {
+    const s = await api('GET', '/api/sensors');
+    const led    = document.getElementById('dbg-led');
+    const rawEl  = document.getElementById('dbg-raw');
+    const voltEl = document.getElementById('dbg-volt');
+    const pctEl  = document.getElementById('dbg-pct');
+    const barEl  = document.getElementById('dbg-bar');
+    const statEl = document.getElementById('dbg-status');
+    const calEl  = document.getElementById('dbg-cal');
+    if (!s.soil_available || s.soil_raw == null) {
+      led.style.background = '#ef4444'; led.style.boxShadow = '0 0 0 3px #ef444433';
+      rawEl.textContent = '—'; voltEl.textContent = '—'; pctEl.textContent = '—';
+      barEl.style.width = '0%';
+      statEl.innerHTML = '<span style="color:#ef4444">No reading — sensor unavailable or not wired.</span>';
+      return;
+    }
+    const raw  = s.soil_raw;
+    const volt = (raw / 1023 * 3.3);
+    // healthy if it's not pinned at the rails (0 or 1023 = wiring/power fault)
+    const railed = (raw <= 1 || raw >= 1022);
+    led.style.background = railed ? '#f59e0b' : '#22c55e';
+    led.style.boxShadow  = railed ? '0 0 0 3px #f59e0b33' : '0 0 0 3px #22c55e33';
+    rawEl.textContent  = raw;
+    voltEl.textContent = volt.toFixed(2) + 'V';
+    pctEl.textContent  = (s.soil_pct != null ? s.soil_pct.toFixed(1) + '%' : '—');
+    barEl.style.width  = Math.max(0, Math.min(100, raw / 1023 * 100)) + '%';
+    calEl.textContent  = `cal_dry=${s.cal_dry} / cal_wet=${s.cal_wet}`;
+    if (raw >= 1022) {
+      statEl.innerHTML = '<span style="color:#f59e0b">Pinned at 1023 — input is railed high. Check sensor power & AOUT→CH0, or analog ground (Pin 14).</span>';
+    } else if (raw <= 1) {
+      statEl.innerHTML = '<span style="color:#f59e0b">Reading 0 — no signal. Sensor likely unpowered or AOUT disconnected from CH0.</span>';
+    } else {
+      statEl.innerHTML = '<span style="color:#22c55e">Live signal looks healthy.</span> Drier = higher ADC, wetter = lower.';
+    }
+  } catch (_) {
+    const statEl = document.getElementById('dbg-status');
+    if (statEl) statEl.innerHTML = '<span style="color:#ef4444">Poll failed — is the service running?</span>';
+  }
+}
+function startDebugPolling() {
+  if (_dbgTimer) return;
+  pollDebug();
+  _dbgTimer = setInterval(pollDebug, 1000);
+}
+function stopDebugPolling() {
+  if (_dbgTimer) { clearInterval(_dbgTimer); _dbgTimer = null; }
 }
 
 async function loadCfg() {
@@ -1726,6 +1965,120 @@ function resetPrompt(which) {
   if (which === 'reasoning_system')  document.getElementById('prompt-system').value = def;
 }
 
+// Format a millisecond duration as the shortest human-readable string.
+//   1234  → "1.2s"
+//   62000 → "1m 2s"
+//   3725000 → "1h 2m"
+function fmtMs(ms) {
+  if (ms == null) return '—';
+  if (ms < 60_000) return (ms / 1000).toFixed(1) + 's';
+  if (ms < 3_600_000) {
+    const m = Math.floor(ms / 60_000);
+    const s = Math.round((ms % 60_000) / 1000);
+    return `${m}m ${s}s`;
+  }
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.round((ms % 3_600_000) / 60_000);
+  return `${h}h ${m}m`;
+}
+
+function median(arr) {
+  if (!arr.length) return null;
+  const s = arr.slice().sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function p95(arr) {
+  if (!arr.length) return null;
+  const s = arr.slice().sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.floor(s.length * 0.95))];
+}
+
+// Build the summary pill bar that sits above the history rows.
+function buildHistorySummary(cycles) {
+  const total = cycles.length;
+  const aiCount = cycles.filter(c => !c.used_fallback).length;
+  const fallbackCount = total - aiCount;
+  const wateredCount = cycles.filter(c => c.final_water).length;
+  const totalWaterSecs = cycles.reduce(
+    (acc, c) => acc + (c.final_water_secs || 0), 0);
+  const reasoningMs = cycles.map(c => c.reasoning_ms).filter(v => v != null);
+  const visionMs   = cycles.map(c => c.vision_ms).filter(v => v != null);
+
+  // Time span covered by the loaded cycles.
+  let spanText = '—';
+  if (cycles.length >= 2) {
+    const oldest = new Date(cycles[cycles.length - 1].ts).getTime();
+    const newest = new Date(cycles[0].ts).getTime();
+    spanText = fmtMs(newest - oldest);
+  }
+
+  const aiPct = total ? Math.round(aiCount / total * 100) : 0;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'h-summary';
+  wrap.innerHTML = `
+    <div class="h-stat">
+      <span class="h-stat-label">Cycles</span>
+      <span class="h-stat-val">${total}</span>
+      <span class="h-stat-sub">over ${spanText}</span>
+    </div>
+    <div class="h-stat">
+      <span class="h-stat-label">AI / Fallback</span>
+      <span class="h-stat-val">${aiCount} / ${fallbackCount}</span>
+      <span class="h-stat-sub">${aiPct}% AI</span>
+    </div>
+    <div class="h-stat">
+      <span class="h-stat-label">Reasoning median</span>
+      <span class="h-stat-val">${fmtMs(median(reasoningMs))}</span>
+      <span class="h-stat-sub">p95 ${fmtMs(p95(reasoningMs))}</span>
+    </div>
+    <div class="h-stat">
+      <span class="h-stat-label">Vision median</span>
+      <span class="h-stat-val">${fmtMs(median(visionMs))}</span>
+      <span class="h-stat-sub">${visionMs.length} samples</span>
+    </div>
+    <div class="h-stat">
+      <span class="h-stat-label">Waterings</span>
+      <span class="h-stat-val">${wateredCount}</span>
+      <span class="h-stat-sub">${totalWaterSecs.toFixed(1)}s total</span>
+    </div>`;
+  return wrap;
+}
+
+async function clearHistory() {
+  // Two-step confirmation: how much we're about to delete, then a final yes/no.
+  // Destructive + irreversible, so make sure the user really means it.
+  let count = '—';
+  try {
+    const cycles = await api('GET', '/api/cycles?limit=200');
+    count = cycles.length >= 200 ? '200+' : String(cycles.length);
+  } catch { /* fall through with — */ }
+
+  const ok = confirm(
+    `Delete ${count} recorded cycles and every stored photo?\n\n` +
+    `This cannot be undone. The control loop will keep running and ` +
+    `start recording new cycles immediately.`
+  );
+  if (!ok) return;
+
+  const btn = document.getElementById('history-clear-btn');
+  btn.disabled = true;
+  btn.textContent = 'Clearing…';
+  try {
+    const r = await api('DELETE', '/api/cycles');
+    toast(`🗑 Cleared ${r.cycles_removed} cycles, ${r.photos_removed} photos`);
+    renderHistory();
+    refresh();   // also updates the dashboard counters
+  } catch (e) {
+    toast('Error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Clear history';
+  }
+}
+
 function renderHistory() {
   const container = document.getElementById('history-list');
   container.innerHTML = '<div style="color:var(--muted);font-style:italic;font-family:Newsreader,serif;padding:8px 0">Loading…</div>';
@@ -1735,21 +2088,69 @@ function renderHistory() {
       return;
     }
     container.innerHTML = '';
+    container.appendChild(buildHistorySummary(cycles));
     cycles.forEach(c => {
       const row = document.createElement('div');
       row.className = 'h-row';
+
+      // ── Thumbnail (or placeholder if no photo). Click to open full size. ──
+      const thumb = c.photo_url
+        ? `<img class="h-thumb" src="${c.photo_url}" alt="cycle ${c.id}"
+              onclick="window.open('${c.photo_url}', '_blank')">`
+        : `<div class="h-thumb-placeholder">no photo</div>`;
+
+      // ── Action chips: what actually happened (post-safety-clamp). ──
       const chips = [
-        c.final_water   ? '<span class="chip chip-water">💧 ' + (c.final_water_secs || 0).toFixed(0) + 's</span>' : '',
-        c.final_light_on ? '<span class="chip chip-light">☀ on</span>' : '',
-      ].join('');
-      const fallback = c.used_fallback
-        ? '<span class="h-fallback">fallback</span><br>' : '';
+        c.final_water   ? `<span class="chip chip-water">💧 ${(c.final_water_secs || 0).toFixed(1)}s</span>` : '',
+        c.final_light_on ? '<span class="chip chip-light">☀ light</span>' : '',
+      ].join('') || '<span class="h-action">no action</span>';
+
+      // ── Sensor readings at the time of the cycle. ──
+      const soilTxt = c.soil_pct != null
+        ? `<span class="h-sensor-val">${c.soil_pct.toFixed(1)}%</span>` : '<span>—</span>';
+      const tempTxt = c.temp_celsius != null
+        ? `<span class="h-sensor-val">${c.temp_celsius.toFixed(1)}°C</span>` : '<span>—</span>';
+
+      // ── Action summary line (what the system actually did, in plain words). ──
+      const actionParts = [];
+      if (c.final_water) actionParts.push(`watered <b>${(c.final_water_secs || 0).toFixed(1)}s</b>`);
+      if (c.final_light_on) actionParts.push('light <b>on</b>'); else actionParts.push('light <b>off</b>');
+      const actionLine = `Action: ${actionParts.join(' · ')}`;
+
+      // ── Source badge: explicit AI vs rule-based fallback. ──
+      const sourceBadge = c.used_fallback
+        ? '<span class="h-fallback">fallback</span>'
+        : '<span class="h-aibadge">AI</span>';
+
+      // ── Model latency. Fallback rows have no vision step. ──
+      const visionLatency = c.vision_ms != null
+        ? `<b>${(c.vision_ms / 1000).toFixed(1)}s</b>` : '<b>—</b>';
+      const reasoningLatency = c.reasoning_ms != null
+        ? `<b>${(c.reasoning_ms / 1000).toFixed(1)}s</b>` : '<b>—</b>';
+      // If fallback, the reasoning_ms recorded is the time spent waiting for
+      // (and timing out on) the LLM before falling back to rules — still
+      // useful as a signal.
+      const latencyLine = `vision ${visionLatency} · reasoning ${reasoningLatency}` +
+        (c.used_fallback && c.reasoning_ms != null ? ' (timed out)' : '');
+
+      const reasoning = escHtml(stripPrefix(c.ai_reasoning) || '—');
+
       row.innerHTML = `
+        ${thumb}
         <div class="h-meta">
-          <div class="h-time">${hm(c.ts)}<br><span style="font-size:10px">${new Date(c.ts).toLocaleDateString([], {month:'short',day:'numeric'})}</span></div>
+          <div class="h-time">${hm(c.ts)}<br><span style="font-size:10px">${new Date(c.ts).toLocaleDateString([], {month:'short',day:'numeric'})} · #${c.id}</span></div>
           <div class="h-chips">${chips}</div>
         </div>
-        <div class="h-text">${fallback}${escHtml(stripPrefix(c.ai_reasoning) || '—')}</div>`;
+        <div class="h-body">
+          <div class="h-sensors">
+            <span>soil ${soilTxt}</span>
+            <span>temp ${tempTxt}</span>
+          </div>
+          <div>${sourceBadge}</div>
+          <div class="h-text">${reasoning}</div>
+          <div class="h-latency">${latencyLine}</div>
+          <div class="h-action">${actionLine}</div>
+        </div>`;
       container.appendChild(row);
     });
   }).catch(() => {
@@ -1791,6 +2192,12 @@ async function refreshSensors() {
   try {
     const s = await api('GET', '/api/sensors');
     const th = (window.__lastStatus && window.__lastStatus.thresholds) || {};
+
+    // Cache the live reading so render()/renderTiles (driven by /api/status)
+    // prefer it over the last DB cycle, which can be stale during wiring.
+    if (s.soil_available && s.soil_pct != null) {
+      window.__liveSoil = { pct: s.soil_pct, raw: s.soil_raw };
+    }
 
     // Soil tile
     const moistureBig = document.getElementById('tile-moisture-big');

@@ -38,15 +38,39 @@ except ImportError:
 
 
 class RealSoilSensor:
-    """Reads the MCP3008 channel 0 over SPI0."""
+    """Reads a capacitive analog soil moisture sensor via MCP3008 CH0 over SPI0.
+
+    The sensor outputs an analog voltage that the MCP3008 converts to a 10-bit
+    value (0–1023).  Direction: higher raw ADC = drier soil (less capacitance →
+    higher output voltage).
+
+    Moisture % is mapped linearly between two calibration endpoints read from
+    config.yaml (``soil.cal_dry`` and ``soil.cal_wet``):
+      - ``cal_dry`` — raw ADC reading with the probe in dry air
+      - ``cal_wet`` — raw ADC reading with the probe fully submerged in water
+    Readings outside that range are clamped to 0–100 %.
+    """
 
     _SPI_BUS = 0
     _SPI_DEVICE = 0   # CE0 → GPIO8
     _CHANNEL = 0      # CH0 on the MCP3008
 
-    def __init__(self) -> None:
+    # Defaults match a typical V1.2 capacitive sensor powered at 3.3 V.
+    # Measure your actual probe and update soil.cal_dry / soil.cal_wet in
+    # config.yaml for best accuracy.
+    _DEFAULT_CAL_DRY = 520
+    _DEFAULT_CAL_WET = 290
+
+    def __init__(self, cfg: dict | None = None) -> None:
         if not _PI_LIBS_AVAILABLE:
             raise RuntimeError("spidev not available — are you on the Pi?")
+        soil_cfg = (cfg or {}).get("soil", {})
+        self._cal_dry = int(soil_cfg.get("cal_dry", self._DEFAULT_CAL_DRY))
+        self._cal_wet = int(soil_cfg.get("cal_wet", self._DEFAULT_CAL_WET))
+        log.info(
+            "RealSoilSensor: cal_dry=%d  cal_wet=%d",
+            self._cal_dry, self._cal_wet,
+        )
         self._spi = spidev.SpiDev()
         self._spi.open(self._SPI_BUS, self._SPI_DEVICE)
         self._spi.max_speed_hz = 1_350_000
@@ -59,7 +83,9 @@ class RealSoilSensor:
 
     def read(self) -> SoilReading:
         raw = self._read_adc(self._CHANNEL)
-        moisture_pct = round((1023 - raw) / 1023 * 100, 1)
+        span = self._cal_dry - self._cal_wet
+        pct = ((self._cal_dry - raw) / span * 100.0) if span > 0 else 0.0
+        moisture_pct = round(max(0.0, min(100.0, pct)), 1)
         log.debug("RealSoilSensor: raw=%d moisture=%.1f%%", raw, moisture_pct)
         return SoilReading(raw=raw, moisture_pct=moisture_pct)
 
@@ -84,15 +110,45 @@ class NullSoilSensor:
 
 
 class RealTemperatureSensor:
-    """Reads the DS18B20 on the 1-Wire bus (GPIO4)."""
+    """Reads the DS18B20 on the 1-Wire bus (GPIO4).
+
+    Resilient to a missing or intermittently-connected probe: the sensor
+    handle is acquired lazily and re-acquired on demand, so a bumped DATA
+    wire never crash-loops the service at startup. A failed read returns
+    ``None`` (treated as *unavailable*) rather than raising — callers must
+    handle ``None``, exactly as they already do for the soil sensor.
+    """
 
     def __init__(self) -> None:
         if not _PI_LIBS_AVAILABLE:
             raise RuntimeError("w1thermsensor not available — are you on the Pi?")
-        self._sensor = W1ThermSensor()
+        # Don't grab the device here — if the probe is unplugged at boot we
+        # must NOT crash. Bind lazily on first successful read.
+        self._sensor = None
 
-    def read(self) -> TemperatureReading:
-        celsius = self._sensor.get_temperature(Unit.DEGREES_C)
+    def _ensure_sensor(self) -> bool:
+        """Try to (re)acquire the DS18B20 handle. Returns True on success."""
+        if self._sensor is not None:
+            return True
+        try:
+            self._sensor = W1ThermSensor()
+            return True
+        except Exception as exc:
+            log.warning("RealTemperatureSensor: no probe found — %s", exc)
+            self._sensor = None
+            return False
+
+    def read(self) -> TemperatureReading | None:
+        if not self._ensure_sensor():
+            return None
+        try:
+            celsius = self._sensor.get_temperature(Unit.DEGREES_C)
+        except Exception as exc:
+            # Probe dropped off the bus mid-run (flaky wire). Drop the handle
+            # so the next read re-scans, and report unavailable for now.
+            log.warning("RealTemperatureSensor: read failed — %s", exc)
+            self._sensor = None
+            return None
         log.debug("RealTemperatureSensor: %.2f °C", celsius)
         return TemperatureReading(celsius=round(celsius, 2))
 
@@ -120,13 +176,20 @@ class RealCamera:
     # polls every few seconds, so keep this cheap.
     _SNAPSHOT_SIZE = (1280, 720)
 
-    def __init__(self) -> None:
+    def __init__(self, settle_seconds: float = 2.0,
+                 snapshot_settle_seconds: float = 1.0) -> None:
         if not _PI_LIBS_AVAILABLE:
             raise RuntimeError("picamera2 not available — are you on the Pi?")
         # Serializes camera access between the cycle's capture() and the
         # dashboard's snapshot() polling — Picamera2 cannot be opened twice.
         import threading
         self._lock = threading.Lock()
+        # How long auto-exposure has to converge after cam.start() before we
+        # actually grab the frame. The cycle's capture wants enough time to
+        # adapt to the grow-light turning on; the dashboard snapshot wants
+        # to be cheap.
+        self._settle_seconds = float(settle_seconds)
+        self._snapshot_settle_seconds = float(snapshot_settle_seconds)
 
     def _grab(self, size, settle_seconds: float):
         """Open camera, grab one frame as RGB numpy array, close. Caller
@@ -159,9 +222,9 @@ class RealCamera:
         dest.parent.mkdir(parents=True, exist_ok=True)
         from PIL import Image
         with self._lock:
-            arr = self._grab(self._STILL_SIZE, settle_seconds=2)
+            arr = self._grab(self._STILL_SIZE, settle_seconds=self._settle_seconds)
         Image.fromarray(arr).save(str(dest), "JPEG", quality=90)
-        log.info("RealCamera: captured → %s", dest)
+        log.info("RealCamera: captured → %s (settle=%.1fs)", dest, self._settle_seconds)
         return str(dest)
 
     def snapshot(self) -> bytes:
@@ -169,7 +232,8 @@ class RealCamera:
         from PIL import Image
         from io import BytesIO
         with self._lock:
-            arr = self._grab(self._SNAPSHOT_SIZE, settle_seconds=1.0)
+            arr = self._grab(self._SNAPSHOT_SIZE,
+                             settle_seconds=self._snapshot_settle_seconds)
         buf = BytesIO()
         Image.fromarray(arr).save(buf, "JPEG", quality=65)
         return buf.getvalue()
@@ -185,8 +249,11 @@ class RealValveActuator:
     def __init__(self, gpio_pin: int) -> None:
         if not _PI_LIBS_AVAILABLE:
             raise RuntimeError("gpiozero not available — are you on the Pi?")
-        # active_high=True: driving the pin HIGH energises the relay coil
-        self._relay = OutputDevice(gpio_pin, active_high=True, initial_value=False)
+        # active_high=False: this is an ACTIVE-LOW relay HAT — driving the pin
+        # LOW energises the relay coil. gpiozero inverts for us, so .on() still
+        # means "relay energised / valve open" and .value reports the true
+        # state. initial_value=False keeps the relay OFF (closed) at boot.
+        self._relay = OutputDevice(gpio_pin, active_high=False, initial_value=False)
 
     def pulse(self, seconds: float) -> None:
         log.info("RealValve: OPEN for %.1fs", seconds)
@@ -213,7 +280,9 @@ class RealLightActuator:
     def __init__(self, gpio_pin: int) -> None:
         if not _PI_LIBS_AVAILABLE:
             raise RuntimeError("gpiozero not available — are you on the Pi?")
-        self._relay = OutputDevice(gpio_pin, active_high=True, initial_value=False)
+        # active_high=False: active-low relay HAT (see RealValveActuator). .on()
+        # energises the relay (light on); .value reports the true state.
+        self._relay = OutputDevice(gpio_pin, active_high=False, initial_value=False)
 
     def set(self, on: bool) -> None:
         if on:

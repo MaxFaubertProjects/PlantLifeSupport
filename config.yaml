@@ -18,20 +18,36 @@ plant:
     (root rot) and prolonged drought. Optimal temperature 18–27 °C.
 
 # ── Soil moisture ─────────────────────────────────────────────────────────────
-# MCP3008 returns 0–1023 (10-bit). Higher value = drier soil on a resistive sensor.
+# Capacitive sensor V1.2 → MCP3008 CH0 over SPI0.
+# Higher raw ADC = drier soil (same direction as resistive sensors).
+# Measured range on this probe: ~317 (water) to ~683 (dry air) at 3.3 V.
 soil:
   # Which soil sensor to use:
-  #   "mcp3008" — real MCP3008 ADC over SPI (set this once the chip is wired)
+  #   "mcp3008" — real MCP3008 ADC over SPI (capacitive V1.2)
   #   "none"    — no sensor installed; moisture reported as unavailable
   #   "mock"    — synthetic simulation data
   sensor: mcp3008
-  # Thresholds for the rule-based fallback (rules.py)
-  dry_threshold: 700        # above this → consider watering
-  wet_threshold: 400        # below this → soil is moist, skip watering
+
+  # ── Calibration (measure your actual probe, then update these two values) ──
+  # 1. Hold probe in open air for 30 s → note the raw ADC shown in the dashboard
+  #    → set cal_dry to that value.
+  # 2. Submerge probe in a glass of water for 30 s → note raw ADC → set cal_wet.
+  # After editing, restart the service: sudo systemctl restart plantlife
+  cal_dry: 683    # raw ADC with probe in dry air  (measured 2026-05-31)
+  cal_wet: 317    # raw ADC with probe in water     (measured 2026-05-31)
+
+  # Thresholds for the rule-based fallback — expressed as raw ADC values.
+  # With cal_dry=683 / cal_wet=317 (range 366):
+  #   573 ≈ 30 % moisture (getting dry  → water)
+  #   445 ≈ 65 % moisture (still moist  → skip)
+  # Tune via the Safety limits sliders on the dashboard after calibrating.
+  dry_threshold: 573        # above this → consider watering
+  wet_threshold: 445        # below this → soil is moist, skip watering
+
   # Simulation: realistic range for a potted monstera
-  sim_initial: 600
+  sim_initial: 400
   sim_dry_rate: 10          # ADC counts lost per hour (soil drying)
-  sim_wet_effect: -250      # ADC counts gained per watering pulse
+  sim_wet_effect: -80       # ADC counts gained per watering pulse
 
 # ── Temperature ───────────────────────────────────────────────────────────────
 temperature:
@@ -44,7 +60,7 @@ temperature:
 
 # ── Watering safety limits ────────────────────────────────────────────────────
 watering:
-  max_pulse_seconds: 8          # hard cap on a single watering pulse
+  max_pulse_seconds: 0.5        # hard cap on a single watering pulse — calibrate by measuring ml/pulse
   min_interval_minutes: 90      # minimum time between two waterings
   # If soil ADC is below wet_threshold, AI request to water is overridden OFF
   # regardless of what the AI says.
@@ -74,7 +90,23 @@ ai:
   # captures and OLLAMA_MAX_LOADED_MODELS=1 (peak ~6 GB used, no swap).
   # Earlier "OOM" crashes turned out to be brownouts on an inadequate PSU.
   # Fallback to llama3.2:3b is a one-line config change if 8b ever struggles.
-  timeout_seconds: 300             # per-request timeout before fallback kicks in
+  timeout_seconds: 600             # per-request timeout before fallback kicks in (llama3.1:8b runs slow on Pi CPU)
+
+# ── Camera ───────────────────────────────────────────────────────────────────
+# The cycle's capture step turns the grow light on for the photo so the
+# vision model sees a well-lit plant. Pi cameras need a moment for auto-
+# exposure to adapt to the lighting change — too short and the photo comes
+# out dark, too long and we waste battery/heat. Two knobs:
+#   pre_capture_light_sec — how long the light is on BEFORE the camera even
+#                           opens (gives the bulb itself time to reach
+#                           steady-state brightness).
+#   settle_seconds        — how long after opening the camera before the
+#                           frame is grabbed (lets auto-exposure converge).
+# Total light-on time per cycle ≈ pre_capture_light_sec + settle_seconds
+#                                + ~0.5s of camera open/close overhead.
+camera:
+  pre_capture_light_sec: 1.0
+  settle_seconds: 2.0
 
 # ── Storage ──────────────────────────────────────────────────────────────────
 storage:

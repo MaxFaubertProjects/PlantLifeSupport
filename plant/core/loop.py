@@ -45,6 +45,13 @@ class ControlLoop:
             ).isoformat(),
         }
         self._cycle_lock = threading.Lock()
+        # Track the light state the model last prescribed so that the capture
+        # flash always restores to the model's intent, not to whatever the
+        # hardware happens to be at (e.g. a manual dashboard toggle).
+        # Initialise from the most-recent DB cycle so a restart picks up the
+        # correct idle state immediately.
+        _seed = list(self._db.recent_cycles(limit=1))
+        self._model_light_on: bool = bool(_seed[0].final_light_on) if _seed else False
 
     def _set_stage(self, stage: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
@@ -95,31 +102,57 @@ class ControlLoop:
         finally:
             self._cycle_lock.release()
 
+    # Neutral temperature used for decision-making when the DS18B20 probe is
+    # missing or its wire is intermittent. Chosen to sit comfortably between
+    # too_cold and too_hot so a missing probe neither forces the warmth-light
+    # on nor suppresses watering — soil moisture stays in charge. The real
+    # (None) value is still what gets recorded to the DB.
+    _NEUTRAL_TEMP_C = 22.0
+
     def _run_cycle_inner(self) -> int:
         # 1. Sense
         self._set_stage("sensing")
         soil = self.hardware.soil.read()   # may be None — no sensor installed
-        temp = self.hardware.temperature.read()
+        from plant.hardware.interfaces import TemperatureReading
+        temp_reading = self.hardware.temperature.read()  # may be None — flaky/no probe
+        temp_missing = temp_reading is None
+        # Downstream reasoning/rules/prompts take a non-optional temperature.
+        # When the probe is unavailable, feed them a neutral stand-in but keep
+        # the honest None for the DB record.
+        temp = temp_reading if temp_reading is not None else TemperatureReading(
+            celsius=self._NEUTRAL_TEMP_C
+        )
+        temp_log = "temp=unavailable (no probe)" if temp_missing else f"temp={temp.celsius:.1f}°C"
         if soil is not None:
-            log.info("Sense: soil=%d ADC (%.1f%%), temp=%.1f°C",
-                     soil.raw, soil.moisture_pct, temp.celsius)
+            log.info("Sense: soil=%d ADC (%.1f%%), %s",
+                     soil.raw, soil.moisture_pct, temp_log)
         else:
-            log.info("Sense: soil=unavailable (no sensor), temp=%.1f°C", temp.celsius)
+            log.info("Sense: soil=unavailable (no sensor), %s", temp_log)
 
         # 2. See
         self._set_stage("capturing")
         photo_path = self._photo_path()
         # Briefly turn the grow light on while the camera captures so the
-        # photo is well-lit for the vision model. Restore whatever state
-        # the light was in before — the AI's own light decision (step 4)
-        # is the source of truth for the end of the cycle.
-        light_was_on = self.hardware.light.is_on()
+        # photo is well-lit for the vision model. Restore the model's
+        # prescribed state afterwards — not the live hardware state, which
+        # might have been overridden manually via the dashboard.
+        light_was_on = self._model_light_on
         self.hardware.light.set(True)
         # Defensive: the shared 5V rail dips briefly when the light relay's
         # coil energizes, and that transient has been observed to briefly
         # trigger CH1 (the valve relay) on this HAT. Re-assert valve OFF
         # immediately after activating the light to clear any spurious state.
         self.hardware.valve.off()
+
+        # Wait for the bulb to reach steady-state brightness before opening
+        # the camera. Without this delay, auto-exposure starts converging
+        # against a still-warming light and ends up over-exposed once the
+        # bulb fully catches up. ~1s gets us out of the LED-warmup region.
+        import time as _time
+        pre_delay = float(self.cfg.get("camera", {}).get("pre_capture_light_sec", 1.0))
+        if pre_delay > 0:
+            _time.sleep(pre_delay)
+
         try:
             saved_path = self.hardware.camera.capture(photo_path)
         finally:
@@ -128,18 +161,26 @@ class ControlLoop:
 
         # 3. Describe
         self._set_stage("describing")
+        import time as _time
+        _t0 = _time.monotonic()
         description = self._vision.describe(saved_path)
-        log.info("Describe: %s", description[:120])
+        vision_ms = int((_time.monotonic() - _t0) * 1000)
+        log.info("Describe: %s [%.1fs]", description[:120], vision_ms / 1000)
 
         # 4. Reason
         self._set_stage("reasoning")
         recent = self._db.recent_cycles(limit=8)
+        _t0 = _time.monotonic()
         decision, used_fallback = self._reasoning.decide(
             soil=soil,
             temp=temp,
             plant_description=description,
             recent_cycles=list(recent),
         )
+        reasoning_ms = int((_time.monotonic() - _t0) * 1000)
+        log.info("Reason: %s [%.1fs]",
+                 "fallback" if used_fallback else "llm",
+                 reasoning_ms / 1000)
 
         # 5. Validate
         safe_decision = apply_safety(
@@ -158,12 +199,19 @@ class ControlLoop:
             log.info("Act: no watering this cycle")
 
         self.hardware.light.set(safe_decision.light_on)
+        # Record what the model prescribed so the next cycle's capture flash
+        # knows exactly what to restore the light to during idle.
+        self._model_light_on = safe_decision.light_on
+        # Same defensive clear as the capture step: the light coil's inrush
+        # has been seen to spuriously latch the valve relay on this HAT.
+        # Re-assert valve OFF after any light state change.
+        self.hardware.valve.off()
 
         # 7. Record
         cycle_id = self._db.insert_cycle(
             soil_raw=soil.raw if soil is not None else None,
             soil_pct=soil.moisture_pct if soil is not None else None,
-            temp_celsius=temp.celsius,
+            temp_celsius=None if temp_missing else temp.celsius,
             photo_path=saved_path,
             plant_description=description,
             ai_water=decision.water,
@@ -174,6 +222,8 @@ class ControlLoop:
             final_water=safe_decision.water,
             final_water_secs=float(safe_decision.water_seconds),
             final_light_on=safe_decision.light_on,
+            vision_ms=vision_ms,
+            reasoning_ms=reasoning_ms,
         )
 
         log.info(

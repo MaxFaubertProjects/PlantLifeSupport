@@ -56,11 +56,25 @@ CREATE TABLE IF NOT EXISTS cycles (
 
     final_water      INTEGER,
     final_water_secs REAL,
-    final_light_on   INTEGER
+    final_light_on   INTEGER,
+
+    -- Per-model wall-clock latency in milliseconds. NULL for cycles recorded
+    -- before this column existed, and for vision_ms when only the rule-based
+    -- fallback ran (e.g. AI unavailable).
+    vision_ms        INTEGER,
+    reasoning_ms     INTEGER
 );
 """
 
 _CREATE_IDX_TS = "CREATE INDEX IF NOT EXISTS idx_cycles_ts ON cycles(ts);"
+
+# Columns added after the initial schema. Older databases don't have them, so
+# _migrate() adds any that are missing — SQLite is fine with ADD COLUMN on a
+# table with existing rows (the new column reads as NULL for old rows).
+_ADD_COLUMNS = [
+    ("vision_ms",    "INTEGER"),
+    ("reasoning_ms", "INTEGER"),
+]
 
 
 # ── Public dataclass ──────────────────────────────────────────────────────────
@@ -83,9 +97,17 @@ class Cycle:
     final_water: bool | None
     final_water_secs: float | None
     final_light_on: bool | None
+    vision_ms: int | None = None
+    reasoning_ms: int | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Cycle":
+        # Tolerate missing columns so the dataclass also works for any pre-
+        # migration row reads (defensive — _migrate() should already have
+        # added them at startup).
+        keys = row.keys()
+        def _get(k):
+            return row[k] if k in keys else None
         return cls(
             id=row["id"],
             ts=row["ts"],
@@ -102,6 +124,8 @@ class Cycle:
             final_water=bool(row["final_water"]) if row["final_water"] is not None else None,
             final_water_secs=row["final_water_secs"],
             final_light_on=bool(row["final_light_on"]) if row["final_light_on"] is not None else None,
+            vision_ms=_get("vision_ms"),
+            reasoning_ms=_get("reasoning_ms"),
         )
 
 
@@ -122,6 +146,12 @@ class Database:
     def _migrate(self) -> None:
         self._conn.execute(_CREATE_CYCLES)
         self._conn.execute(_CREATE_IDX_TS)
+        # Idempotently add later-introduced columns to pre-existing databases.
+        existing = {row["name"] for row in
+                    self._conn.execute("PRAGMA table_info(cycles)").fetchall()}
+        for name, decl in _ADD_COLUMNS:
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE cycles ADD COLUMN {name} {decl};")
         self._conn.commit()
 
     @contextmanager
@@ -151,6 +181,8 @@ class Database:
         final_water: bool | None = None,
         final_water_secs: float | None = None,
         final_light_on: bool | None = None,
+        vision_ms: int | None = None,
+        reasoning_ms: int | None = None,
     ) -> int:
         """Insert a completed cycle and return its new id."""
         ts = datetime.now(timezone.utc).isoformat()
@@ -162,13 +194,15 @@ class Database:
                     plant_description,
                     ai_water, ai_water_seconds, ai_light_on, ai_reasoning,
                     used_fallback,
-                    final_water, final_water_secs, final_light_on
+                    final_water, final_water_secs, final_light_on,
+                    vision_ms, reasoning_ms
                 ) VALUES (
                     ?, ?, ?, ?, ?,
                     ?,
                     ?, ?, ?, ?,
                     ?,
-                    ?, ?, ?
+                    ?, ?, ?,
+                    ?, ?
                 )
                 """,
                 (
@@ -182,6 +216,7 @@ class Database:
                     int(final_water) if final_water is not None else None,
                     final_water_secs,
                     int(final_light_on) if final_light_on is not None else None,
+                    vision_ms, reasoning_ms,
                 ),
             )
             return cur.lastrowid  # type: ignore[return-value]
@@ -205,6 +240,23 @@ class Database:
     def cycle_count(self) -> int:
         """Total number of recorded cycles."""
         return self._conn.execute("SELECT COUNT(*) FROM cycles").fetchone()[0]
+
+    def clear_cycles(self) -> int:
+        """Delete every cycle row and reset the autoincrement counter.
+
+        Returns the number of rows deleted. Used by the dashboard's
+        "Clear history" button — destructive and irreversible, so the
+        caller is responsible for confirmation.
+        """
+        with self._tx():
+            removed = self._conn.execute("SELECT COUNT(*) FROM cycles").fetchone()[0]
+            self._conn.execute("DELETE FROM cycles")
+            # Reset AUTOINCREMENT so the next cycle is #1 again. sqlite_sequence
+            # is only present once an AUTOINCREMENT table has been populated.
+            self._conn.execute(
+                "DELETE FROM sqlite_sequence WHERE name='cycles'"
+            )
+        return int(removed)
 
     def close(self) -> None:
         self._conn.close()
