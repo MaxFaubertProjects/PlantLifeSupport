@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=1280, initial-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Plant Life Support</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,7 +21,7 @@
       --red:     #c45a4a;
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; background: #1a1a1a; overflow: hidden; }
+    html, body { margin: 0; padding: 0; background: #f5f1e8; overflow: hidden; }
     body { font-family: "DM Sans", -apple-system, sans-serif; color: var(--ink); }
     button { font-family: inherit; }
 
@@ -29,7 +29,7 @@
     #stage-wrap {
       position: fixed; inset: 0;
       display: flex; align-items: center; justify-content: center;
-      background: #1a1a1a;
+      background: #f5f1e8;
     }
     #stage {
       width: 1280px; height: 800px;
@@ -657,6 +657,120 @@
       transition: background .12s;
     }
     .gear-btn:hover { background: var(--line); }
+
+    /* ── Responsive: tablet 600–899px ─────────────────────────────────── */
+    @media (max-width: 899px) {
+      html, body {
+        background: var(--bg);
+        overflow: auto;
+      }
+      #stage-wrap {
+        position: static;
+        display: block;
+        background: var(--bg);
+      }
+      #stage {
+        width: 100%;
+        height: auto;
+        transform: none !important;
+        overflow: visible;
+        font-size: 14px;
+      }
+      .body {
+        grid-template-columns: 1fr;
+        height: auto;
+        gap: 14px;
+        padding: 14px;
+      }
+      .left, .right {
+        min-height: unset;
+      }
+      .hero {
+        flex: none;
+        height: 280px;
+      }
+      .tiles {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .chart-row {
+        grid-template-columns: 1fr;
+        flex: none;
+        min-height: unset;
+      }
+      .controls {
+        flex-direction: column;
+      }
+      .softbtn {
+        width: 100%;
+      }
+      #cfg-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 200;
+      }
+    }
+
+    /* ── Responsive: phone < 600px ─────────────────────────────────────── */
+    @media (max-width: 599px) {
+      .hdr {
+        height: 56px;
+        padding: 0 16px;
+        gap: 10px;
+      }
+      .clock {
+        display: none;
+      }
+      .strip {
+        height: auto;
+        padding: 10px 16px;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .pipeline {
+        display: none;
+      }
+      .nar-text {
+        font-size: 18px;
+      }
+      .body {
+        padding: 12px;
+        gap: 12px;
+      }
+      .hero {
+        height: 240px;
+        border-radius: 14px;
+      }
+      .big {
+        font-size: 28px;
+      }
+      .tile {
+        padding: 12px 12px 10px;
+      }
+      .softbtn {
+        min-height: 72px;
+      }
+      .softbtn-label {
+        font-size: 16px;
+      }
+      #cfg-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 200;
+        overflow: hidden;
+      }
+      .cfg-body {
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+      }
+      .mode-chip {
+        display: none;
+      }
+    }
+
+    /* Extra small: hide pipeline text on very narrow phones */
+    @media (max-width: 399px) {
+      .pipeline-intro, .pipe-label { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -732,11 +846,12 @@
           <div class="tile">
             <div class="label">Grow light</div>
             <div class="big" id="tile-light-big">—</div>
-            <div id="tile-light-dots" style="display:flex;gap:2px;height:16px"></div>
-            <div class="sub" id="tile-light-sub">—</div>
+            <div id="tile-light-dots" style="display:flex;gap:2px;height:8px;margin-bottom:6px"></div>
+            <div id="tile-water-dots" style="display:flex;gap:2px;height:8px"></div>
+            <div class="sub" id="tile-light-sub" style="margin-top:4px">—</div>
           </div>
           <div class="tile">
-            <div class="label">Next cycle</div>
+            <div class="label" id="tile-next-label">Next cycle</div>
             <div class="big" id="tile-next-big">—</div>
             <svg viewBox="0 0 120 6" preserveAspectRatio="none" style="width:100%;height:6px">
               <rect id="tile-next-track" x="0" y="2" width="120" height="2" fill="var(--line)" rx="1"/>
@@ -777,7 +892,14 @@
                 <span class="spacer"></span>
                 <span class="sub-current" id="sc-light-cur">—</span>
               </div>
-              <div class="light-strip" id="sc-light-strip" style="flex:1;height:auto"></div>
+              <div class="light-strip" id="sc-light-strip" style="flex:1;height:8px;margin-bottom:8px"></div>
+              <div class="sub-chart-hdr" style="margin-top:0">
+                <span class="sub-swatch" style="background:var(--blue);border-radius:2px;width:10px;height:10px;display:inline-block;margin-right:4px"></span>
+                <span class="sub-name">Watering</span>
+                <span class="spacer"></span>
+                <span class="sub-current" id="sc-water-cur">—</span>
+              </div>
+              <div class="light-strip" id="sc-water-strip" style="flex:1;height:8px"></div>
             </div>
             <div class="axis-row">
               <span class="axis-tick" id="axis-start">00:00</span>
@@ -922,6 +1044,34 @@
               </div>
             </div>
 
+            <!-- Temperature debug panel -->
+            <div class="cfg-ranges-group" id="dbg-temp-panel" style="background:#0f1419;border:1px solid #1f2933;border-radius:12px;padding:16px 18px;margin-bottom:24px">
+              <div class="cfg-ranges-title" style="display:flex;align-items:center;gap:8px;color:#9fb4c7">
+                <span id="dbg-temp-led" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#555;box-shadow:0 0 0 3px #5552"></span>
+                🌡 Live temperature sensor — DS18B20 debug
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin:14px 0 6px">
+                <div>
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#5f7488">Temperature</div>
+                  <div id="dbg-temp-val" style="font-size:30px;font-weight:700;color:#e6edf3;font-variant-numeric:tabular-nums;line-height:1.1">—</div>
+                  <div style="font-size:11px;color:#5f7488">°C</div>
+                </div>
+                <div>
+                  <div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#5f7488">1-Wire device</div>
+                  <div id="dbg-temp-id" style="font-size:13px;font-weight:600;color:#e6edf3;line-height:1.4;margin-top:6px;word-break:break-all">—</div>
+                </div>
+              </div>
+              <!-- temp bar: 0°C (left) to 40°C (right), safe zone highlighted -->
+              <div style="height:8px;background:#1f2933;border-radius:4px;overflow:hidden;margin:10px 0 4px;position:relative">
+                <div style="position:absolute;left:37.5%;width:42.5%;height:100%;background:#1e3a2a;border-radius:4px"></div>
+                <div id="dbg-temp-bar" style="position:absolute;top:0;left:0;height:100%;width:0%;background:linear-gradient(90deg,#6a8aaa,#f59e0b,#c45a4a);transition:width .5s;border-radius:4px"></div>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:#5f7488">
+                <span>0°C</span><span>safe zone</span><span>40°C</span>
+              </div>
+              <div id="dbg-temp-status" style="font-size:12px;color:#7a8ca0;margin-top:10px">Waiting for reading…</div>
+            </div>
+
             <div class="cfg-ranges-group">
               <div class="cfg-ranges-title">💧 Soil moisture</div>
               <div class="cfg-slider-field">
@@ -1063,6 +1213,12 @@ const REFRESH_ACTIVE = 2000;
 
 // ── Letterbox scaling ──
 function fitStage() {
+  if (window.innerWidth < 900) {
+    // On tablet/phone the layout is responsive — no scaling needed
+    const stage = document.getElementById('stage');
+    stage.style.transform = '';
+    return;
+  }
   const wrap = document.getElementById('stage-wrap');
   const stage = document.getElementById('stage');
   const s = Math.min(wrap.clientWidth / 1280, wrap.clientHeight / 800);
@@ -1224,10 +1380,13 @@ function render(status, cycles) {
         : (latest ? `ADC ${latest.soil_raw} of 1023` : '—');
   }
 
-  // Temp
+  // Temp — prefer live reading (cached by refreshSensors) to avoid flashing
+  // when the API occasionally returns null on a transient 1-Wire hiccup.
   const tempBig = document.getElementById('tile-temp-big');
-  tempBig.innerHTML = latest && latest.temp_celsius != null
-    ? `${latest.temp_celsius.toFixed(1)}<span class="unit">°C</span>` : '—';
+  const tempC = window.__liveTemp != null ? window.__liveTemp
+    : (latest && latest.temp_celsius != null ? latest.temp_celsius : null);
+  tempBig.innerHTML = tempC != null
+    ? `${tempC.toFixed(1)}<span class="unit">°C</span>` : '—';
   const tempVals = cycles.slice().reverse().map(c => c.temp_celsius).filter(v => v != null);
   renderSparkline(document.getElementById('tile-temp-spark'), tempVals, T.warn);
   document.getElementById('tile-temp-sub').textContent =
@@ -1248,6 +1407,9 @@ function render(status, cycles) {
       : (lightOn ? 'Currently growing' : 'Following schedule');
   renderLightDots(document.getElementById('tile-light-dots'),
     cycles.slice(0, 16).reverse().map(c => c.final_light_on));
+  renderLightDots(document.getElementById('tile-water-dots'),
+    cycles.slice(0, 16).reverse().map(c => c.final_water),
+    T.blue);
 
   // Next cycle
   const eta = status.cycle_state.next_cycle_eta_sec;
@@ -1369,6 +1531,7 @@ function renderNextCycleTile() {
   const track = document.getElementById('tile-next-track');
   const bar   = document.getElementById('tile-next-bar');
   const sub   = document.getElementById('tile-next-sub');
+  const label = document.getElementById('tile-next-label');
   const tile  = big.closest('.tile');
   const stage = (window.__lastStatus && window.__lastStatus.cycle_state.stage) || 'idle';
   const running = stage !== 'idle' && stage !== 'starting';
@@ -1376,14 +1539,30 @@ function renderNextCycleTile() {
   if (tile) tile.classList.toggle('running', running);
 
   if (running) {
-    big.innerHTML = `Now<span class="unit"> running</span>`;
+    if (label) label.textContent = 'Analysis in progress';
+    // Compute elapsed seconds since the cycle started (cycle_started_at is ISO).
+    const MAX_CYCLE_SECS = 8 * 60; // ~8 min hard cap for display purposes
+    const cs = window.__lastStatus && window.__lastStatus.cycle_state.cycle_started_at;
+    let elapsed = 0;
+    if (cs) {
+      elapsed = Math.max(0, Math.round((Date.now() - new Date(cs).getTime()) / 1000));
+    }
+    const remaining = Math.max(0, MAX_CYCLE_SECS - elapsed);
+    const rm = Math.floor(remaining / 60), rs = remaining % 60;
+    // Show remaining time as the big number
+    big.innerHTML = remaining > 0
+      ? `${rm}<span class="unit">:${pad2(rs)}</span>`
+      : `<span class="unit">wrapping up</span>`;
     big.style.color = '';          // CSS .tile.running .big handles white
     track.setAttribute('fill', 'rgba(255,255,255,.2)');
-    bar.setAttribute('width', '120');
+    // Progress bar fills as cycle elapses toward the 8-min cap
+    const frac = Math.min(1, elapsed / MAX_CYCLE_SECS);
+    bar.setAttribute('width', String(Math.round(120 * frac)));
     bar.setAttribute('fill', 'rgba(255,255,255,.55)');
     sub.textContent = stage + '…';
     return;
   }
+  if (label) label.textContent = 'Next cycle';
   // Restore bar colours when not running
   track.setAttribute('fill', 'var(--line)');
   bar.setAttribute('fill', T.accent);
@@ -1437,8 +1616,9 @@ function renderSparkline(svg, values, color) {
   svg.appendChild(path);
 }
 
-function renderLightDots(container, onSeries) {
+function renderLightDots(container, onSeries, color) {
   container.innerHTML = '';
+  const activeColor = color || T.amber;
   // Always show 16 cells; pad with empty (off) on the left
   const cells = onSeries.length >= 16
     ? onSeries.slice(-16)
@@ -1447,8 +1627,8 @@ function renderLightDots(container, onSeries) {
     const d = document.createElement('div');
     d.style.flex = '1';
     d.style.borderRadius = '3px';
-    d.style.background = on ? T.amber : T.line;
-    d.style.opacity = on ? 1 : 0.6;
+    d.style.background = on ? activeColor : T.line;
+    d.style.opacity = on ? 1 : 0.4;
     container.appendChild(d);
   });
 }
@@ -1538,6 +1718,29 @@ function renderTrends(cycles, latest, lightOn) {
     strip.appendChild(d);
   });
   document.getElementById('sc-light-cur').textContent = lightOn ? 'on now' : 'off now';
+
+  // Watering strip — same time-positioned layout as light, blue for watered cycles
+  const waterStrip = document.getElementById('sc-water-strip');
+  waterStrip.innerHTML = '';
+  waterStrip.style.position = 'relative';
+  chrono.forEach((c, i) => {
+    const x0 = xPos[i];
+    const x1 = i + 1 < xPos.length ? xPos[i + 1] : Math.min(1, x0 + 1 / 24);
+    const d = document.createElement('div');
+    const watered = !!(c.final_water && c.final_water_secs > 0);
+    d.style.cssText = `position:absolute;top:0;bottom:0;
+      left:${(x0 * 100).toFixed(2)}%;
+      width:${((x1 - x0) * 100).toFixed(2)}%;
+      background:${watered ? T.blue : T.line};
+      opacity:${watered ? 0.95 : 0.4}`;
+    waterStrip.appendChild(d);
+  });
+  // Count waterings today and total seconds
+  const wateredCycles = chrono.filter(c => c.final_water && c.final_water_secs > 0);
+  const totalWaterSecs = wateredCycles.reduce((sum, c) => sum + (c.final_water_secs || 0), 0);
+  document.getElementById('sc-water-cur').textContent = wateredCycles.length > 0
+    ? `${wateredCycles.length}× today (${totalWaterSecs.toFixed(1)}s total)`
+    : 'none today';
 }
 
 function drawSubChart(svg, values, opts) {
@@ -1836,6 +2039,34 @@ async function pollDebug() {
       statEl.innerHTML = '<span style="color:#f59e0b">Reading 0 — no signal. Sensor likely unpowered or AOUT disconnected from CH0.</span>';
     } else {
       statEl.innerHTML = '<span style="color:#22c55e">Live signal looks healthy.</span> Drier = higher ADC, wetter = lower.';
+    }
+
+    // ── Temperature debug panel ──────────────────────────────────────────
+    const tLed    = document.getElementById('dbg-temp-led');
+    const tVal    = document.getElementById('dbg-temp-val');
+    const tId     = document.getElementById('dbg-temp-id');
+    const tBar    = document.getElementById('dbg-temp-bar');
+    const tStat   = document.getElementById('dbg-temp-status');
+    if (!tLed) return; // panel not in DOM yet
+    if (s.temp_celsius == null) {
+      tLed.style.background = '#ef4444';
+      tLed.style.boxShadow  = '0 0 0 3px #ef444433';
+      tVal.textContent = '—';
+      tId.textContent  = 'No device on 1-Wire bus';
+      tBar.style.width = '0%';
+      tStat.innerHTML  = '<span style="color:#ef4444">DS18B20 not detected.</span> Check VCC→Pin 1, GND, DATA→Pin 7 (GPIO4). Should appear instantly when wired correctly.';
+    } else {
+      const t = s.temp_celsius;
+      const cold = 15, hot = 32;
+      const healthy = t >= cold && t <= hot;
+      tLed.style.background = healthy ? '#22c55e' : '#f59e0b';
+      tLed.style.boxShadow  = healthy ? '0 0 0 3px #22c55e33' : '0 0 0 3px #f59e0b33';
+      tVal.textContent = t.toFixed(2);
+      tId.textContent  = 'Device detected ✓';
+      tBar.style.width = Math.max(0, Math.min(100, t / 40 * 100)) + '%';
+      tStat.innerHTML  = healthy
+        ? `<span style="color:#22c55e">Reading healthy — ${t.toFixed(1)}°C is within the safe range (${cold}–${hot}°C).</span>`
+        : `<span style="color:#f59e0b">Temperature outside safe range (${t.toFixed(1)}°C).</span>`;
     }
   } catch (_) {
     const statEl = document.getElementById('dbg-status');
@@ -2197,6 +2428,10 @@ async function refreshSensors() {
     // prefer it over the last DB cycle, which can be stale during wiring.
     if (s.soil_available && s.soil_pct != null) {
       window.__liveSoil = { pct: s.soil_pct, raw: s.soil_raw };
+    }
+    // Cache live temp so render() never flashes — only update on a real reading.
+    if (s.temp_celsius != null) {
+      window.__liveTemp = s.temp_celsius;
     }
 
     // Soil tile

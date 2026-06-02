@@ -60,12 +60,30 @@ def get_reasoning_system(cfg: dict) -> str:
     return override if override else REASONING_SYSTEM_DEFAULT
 
 
+def _light_hours_today(recent_cycles) -> float:
+    """Estimate hours the light was on in the last 24 h from cycle history."""
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    hours = 0.0
+    for c in recent_cycles:
+        try:
+            ts = datetime.fromisoformat(c.ts)
+        except ValueError:
+            continue
+        if ts < cutoff:
+            break  # newest-first; stop once outside the window
+        if c.final_light_on:
+            hours += 1.0  # each cycle ≈ 1 hour of light
+    return hours
+
+
 def build_reasoning_prompt(
     cfg: dict,
     soil: SoilReading | None,
     temp: TemperatureReading,
     plant_description: str,
     recent_cycles_summary: str,
+    recent_cycles: list | None = None,
 ) -> tuple[str, str]:
     """Return (system_prompt, user_prompt) for the reasoning model.
 
@@ -78,6 +96,8 @@ def build_reasoning_prompt(
         plant_description: Plain-text output from the VLM.
         recent_cycles_summary: Short text describing the last few cycles
             (e.g. "Watered 3h ago. Light was off.").
+        recent_cycles: Full cycle list used to compute light hours today.
+            Optional — if omitted the light budget line is omitted.
 
     Returns:
         A (system, user) tuple ready to pass to the Ollama chat API.
@@ -88,13 +108,28 @@ def build_reasoning_prompt(
     watering = cfg["watering"]
     light = cfg["light"]
 
-    # Convert soil ADC thresholds to moisture % for human-readable prompting.
+    # Convert soil ADC thresholds to moisture % using calibration endpoints.
+    cal_dry = int(soil_cfg.get("cal_dry", 1023))
+    cal_wet = int(soil_cfg.get("cal_wet", 0))
+    span = cal_dry - cal_wet or 1
     dry_adc = soil_cfg.get("dry_threshold", 700)
     wet_adc = soil_cfg.get("wet_threshold", 400)
-    dry_pct = round((1023 - dry_adc) / 1023 * 100, 1)
-    wet_pct = round((1023 - wet_adc) / 1023 * 100, 1)
+    dry_pct = round(max(0.0, min(100.0, (cal_dry - dry_adc) / span * 100)), 1)
+    wet_pct = round(max(0.0, min(100.0, (cal_dry - wet_adc) / span * 100)), 1)
     too_cold = temp_cfg.get("too_cold_celsius", 15.0)
     too_hot  = temp_cfg.get("too_hot_celsius", 32.0)
+
+    # Light budget awareness — tell the AI how much of today's allowance is used.
+    max_light_hours = light["max_on_hours_per_day"]
+    if recent_cycles is not None:
+        used_hours = _light_hours_today(recent_cycles)
+        remaining_hours = max(0.0, max_light_hours - used_hours)
+        light_budget_line = (
+            f"  Light on today: ~{used_hours:.0f}h used of {max_light_hours}h allowed "
+            f"({remaining_hours:.0f}h remaining)"
+        )
+    else:
+        light_budget_line = f"  Light budget: {max_light_hours}h max per day"
 
     if soil is not None:
         soil_reading_line = (
@@ -135,6 +170,7 @@ Species notes: {plant['species_notes'].strip()}
 Current sensor readings:
 {soil_reading_line}
   Temperature: {temp.celsius:.1f} °C
+{light_budget_line}
 
 Visual observation:
   {plant_description.strip()}

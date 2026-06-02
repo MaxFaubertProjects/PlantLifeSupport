@@ -119,12 +119,19 @@ class RealTemperatureSensor:
     handle ``None``, exactly as they already do for the soil sensor.
     """
 
+    # How many consecutive failed reads before we give up and return None.
+    # The 1-Wire bus occasionally misses a read even when the probe is healthy,
+    # so we hold the last known value through transient hiccups.
+    _FAIL_TOLERANCE = 3
+
     def __init__(self) -> None:
         if not _PI_LIBS_AVAILABLE:
             raise RuntimeError("w1thermsensor not available — are you on the Pi?")
         # Don't grab the device here — if the probe is unplugged at boot we
         # must NOT crash. Bind lazily on first successful read.
         self._sensor = None
+        self._last_good: TemperatureReading | None = None
+        self._fail_count: int = 0
 
     def _ensure_sensor(self) -> bool:
         """Try to (re)acquire the DS18B20 handle. Returns True on success."""
@@ -140,17 +147,29 @@ class RealTemperatureSensor:
 
     def read(self) -> TemperatureReading | None:
         if not self._ensure_sensor():
+            self._fail_count += 1
+            if self._fail_count <= self._FAIL_TOLERANCE and self._last_good is not None:
+                log.debug("RealTemperatureSensor: no sensor, returning last known %.2f°C",
+                          self._last_good.celsius)
+                return self._last_good
             return None
         try:
             celsius = self._sensor.get_temperature(Unit.DEGREES_C)
         except Exception as exc:
-            # Probe dropped off the bus mid-run (flaky wire). Drop the handle
-            # so the next read re-scans, and report unavailable for now.
+            # Probe dropped off the bus mid-run. Drop the handle so the next
+            # read re-scans. Hold the last good value through brief hiccups.
             log.warning("RealTemperatureSensor: read failed — %s", exc)
             self._sensor = None
+            self._fail_count += 1
+            if self._fail_count <= self._FAIL_TOLERANCE and self._last_good is not None:
+                log.debug("RealTemperatureSensor: returning last known %.2f°C (fail %d/%d)",
+                          self._last_good.celsius, self._fail_count, self._FAIL_TOLERANCE)
+                return self._last_good
             return None
-        log.debug("RealTemperatureSensor: %.2f °C", celsius)
-        return TemperatureReading(celsius=round(celsius, 2))
+        self._fail_count = 0
+        self._last_good = TemperatureReading(celsius=round(celsius, 2))
+        log.debug("RealTemperatureSensor: %.2f °C", self._last_good.celsius)
+        return self._last_good
 
 
 class RealCamera:

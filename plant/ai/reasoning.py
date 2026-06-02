@@ -53,7 +53,8 @@ class ReasoningClient:
         """
         history = summarise_recent_cycles(recent_cycles)
         system, user = build_reasoning_prompt(
-            self._cfg, soil, temp, plant_description, history
+            self._cfg, soil, temp, plant_description, history,
+            recent_cycles=recent_cycles,
         )
 
         try:
