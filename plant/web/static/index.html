@@ -2127,7 +2127,7 @@ function closeCfg() {
 
 function switchTab(name) {
   activeTab = name;
-  const tabs = ['schedule', 'plant', 'ranges', 'prompt', 'history'];
+  const tabs = ['schedule', 'plant', 'prompt', 'history'];
   document.querySelectorAll('.cfg-tab').forEach((btn, i) => {
     btn.classList.toggle('active', tabs[i] === name);
   });
@@ -2137,11 +2137,11 @@ function switchTab(name) {
   });
   if (name === 'history') renderHistory();
   if (name === 'prompt')  renderPromptTab();
-  if (name === 'ranges')  startDebugPolling();
+  if (name === 'plant')   startDebugPolling();
   else                    stopDebugPolling();
 }
 
-// ── Live raw-ADC debug widget (Safety limits tab) ───────────────────────────
+// ── Live raw-ADC debug widget (Plant tab) ───────────────────────────────────
 let _dbgTimer = null;
 async function pollDebug() {
   try {
