@@ -60,6 +60,10 @@ class LightRanges(BaseModel):
     max_on_hours_per_day: Optional[float] = None
 
 
+class AISettings(BaseModel):
+    timeout_seconds: Optional[int] = None
+
+
 class PromptsUpdateRequest(BaseModel):
     vision: Optional[str] = None
     reasoning_system: Optional[str] = None
@@ -72,6 +76,7 @@ class ConfigUpdateRequest(BaseModel):
     temperature: Optional[TemperatureRanges] = None
     watering: Optional[WateringRanges] = None
     light: Optional[LightRanges] = None
+    ai: Optional[AISettings] = None
 
 
 def _adc_to_pct(adc: int, cal_dry: int = 1023, cal_wet: int = 0) -> float:
@@ -361,6 +366,9 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             "light": {
                 "max_on_hours_per_day": light.get("max_on_hours_per_day", 16),
             },
+            "ai": {
+                "timeout_seconds": cfg.get("ai", {}).get("timeout_seconds", 1000),
+            },
         }
 
     @app.post("/api/config")
@@ -412,6 +420,12 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             if req.light.max_on_hours_per_day is not None:
                 l["max_on_hours_per_day"] = req.light.max_on_hours_per_day
             log.info("Config: light limits updated")
+
+        if req.ai is not None:
+            ai = cfg.setdefault("ai", {})
+            if req.ai.timeout_seconds is not None:
+                ai["timeout_seconds"] = req.ai.timeout_seconds
+                log.info("Config: ai.timeout_seconds → %d", req.ai.timeout_seconds)
 
         config_path = cfg.get("_config_path")
         if config_path:
@@ -524,4 +538,5 @@ def _cycle_to_dict(c) -> dict[str, Any]:
         "final_light_on": c.final_light_on,
         "vision_ms": c.vision_ms,
         "reasoning_ms": c.reasoning_ms,
+        "warnings": c.warnings,
     }

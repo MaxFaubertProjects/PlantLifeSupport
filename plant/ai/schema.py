@@ -42,6 +42,37 @@ class Decision(BaseModel):
         min_length=10,
         description="Plain-English explanation of the decision (1–3 sentences).",
     )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Short flags about visible plant health issues observed in the photo "
+            "(e.g. 'yellowing leaves', 'drooping stem', 'dry cracked soil', "
+            "'possible pest damage'). Empty list when nothing notable is seen."
+        ),
+    )
+
+    @field_validator("warnings", mode="before")
+    @classmethod
+    def _coerce_warnings(cls, v):
+        # Be lenient about model output: accept None, a single string, or a list.
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, list):
+            return []
+        # Normalise: strip, drop empties, cap length per item, cap count.
+        cleaned = []
+        for item in v:
+            if not isinstance(item, str):
+                continue
+            s = item.strip()
+            if not s:
+                continue
+            cleaned.append(s[:80])
+            if len(cleaned) >= 6:
+                break
+        return cleaned
 
     @field_validator("water_seconds")
     @classmethod

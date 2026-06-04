@@ -124,6 +124,14 @@ class RealTemperatureSensor:
     # so we hold the last known value through transient hiccups.
     _FAIL_TOLERANCE = 3
 
+    # DS18B20 power-on default register value. If the probe's ADC fails to
+    # complete a conversion (bad VDD, dying chip), the scratchpad keeps
+    # returning this exact reading forever — bus enumeration and CRC pass,
+    # but the number is meaningless. Treat a run of exact-85.0 reads as a
+    # sensor fault rather than a real temperature.
+    _STUCK_DEFAULT_C = 85.0
+    _STUCK_TOLERANCE = 3
+
     def __init__(self) -> None:
         if not _PI_LIBS_AVAILABLE:
             raise RuntimeError("w1thermsensor not available — are you on the Pi?")
@@ -132,6 +140,7 @@ class RealTemperatureSensor:
         self._sensor = None
         self._last_good: TemperatureReading | None = None
         self._fail_count: int = 0
+        self._stuck_count: int = 0
 
     def _ensure_sensor(self) -> bool:
         """Try to (re)acquire the DS18B20 handle. Returns True on success."""
@@ -166,6 +175,21 @@ class RealTemperatureSensor:
                           self._last_good.celsius, self._fail_count, self._FAIL_TOLERANCE)
                 return self._last_good
             return None
+        if celsius == self._STUCK_DEFAULT_C:
+            self._stuck_count += 1
+            if self._stuck_count >= self._STUCK_TOLERANCE:
+                log.warning(
+                    "RealTemperatureSensor: stuck at %.1f °C for %d reads — "
+                    "probe ADC conversion is failing (check VDD/pull-up or swap probe)",
+                    self._STUCK_DEFAULT_C, self._stuck_count,
+                )
+                return None
+            log.debug("RealTemperatureSensor: ignoring %.1f °C default reading (%d/%d)",
+                      self._STUCK_DEFAULT_C, self._stuck_count, self._STUCK_TOLERANCE)
+            if self._last_good is not None:
+                return self._last_good
+            return None
+        self._stuck_count = 0
         self._fail_count = 0
         self._last_good = TemperatureReading(celsius=round(celsius, 2))
         log.debug("RealTemperatureSensor: %.2f °C", self._last_good.celsius)

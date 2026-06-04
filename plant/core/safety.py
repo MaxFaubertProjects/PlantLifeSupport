@@ -120,6 +120,7 @@ def apply_safety(
         water_seconds=float(water_seconds),
         light_on=light_on,
         reasoning=reasoning,
+        warnings=proposed.warnings,
     )
 
 

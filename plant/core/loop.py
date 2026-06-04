@@ -224,6 +224,7 @@ class ControlLoop:
             final_light_on=safe_decision.light_on,
             vision_ms=vision_ms,
             reasoning_ms=reasoning_ms,
+            warnings=safe_decision.warnings,
         )
 
         log.info(

@@ -202,6 +202,18 @@
     .tile.running .big   { color: #fff !important; }
     .tile.running .big .unit { color: rgba(255,255,255,.75); }
     .tile.running .sub   { color: rgba(255,255,255,.75); }
+    /* Out-of-safe-range alert: solid warm background + ⚠ badge on the label */
+    .tile.alert {
+      background: var(--warn); border-color: var(--warn);
+    }
+    .tile.alert .label { color: rgba(255,255,255,.78); }
+    .tile.alert .big,
+    .tile.alert .big .unit { color: #fff !important; }
+    .tile.alert .sub  { color: rgba(255,255,255,.85); }
+    .tile.alert .label::after {
+      content: "⚠"; margin-left: 6px; font-size: 11px;
+      letter-spacing: 0; text-transform: none;
+    }
     .big {
       font-family: "Newsreader", serif; font-size: 32px; line-height: 1;
       font-weight: 400; letter-spacing: -0.01em;
@@ -240,16 +252,64 @@
     }
     .sub-chart svg { width: 100%; flex: 1; min-height: 0; display: block; }
     .light-strip {
-      display: flex; gap: 1px; height: 14px;
+      display: flex; gap: 3px; height: 14px;
       padding-left: 50px; padding-right: 8px; margin-top: 4px;
     }
-    .light-strip > div { flex: 1; border-radius: 2px; }
+    .light-strip > div {
+      flex: 1; border-radius: 2px;
+      background: rgba(120, 100, 70, 0.12);
+    }
+    .light-strip > div.on-amber { background: var(--accent); opacity: 0.95; }
+    .light-strip > div.on-blue  { background: var(--blue);   opacity: 0.95; }
     .axis-row {
       display: flex; justify-content: space-between;
       padding-left: 56px; padding-right: 6px; margin-top: 2px;
     }
     .axis-tick {
       font-size: 9px; color: var(--muted); font-family: "DM Mono", monospace;
+    }
+
+    /* Plant warnings — what the vision model flagged about visible health.
+       Sits directly above the reasoning log so it's the first thing the eye
+       lands on when something looks off in the photo. */
+    .warnings {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: 14px; padding: 12px 16px 12px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .warnings.alert {
+      background: rgba(196,146,74,.06);
+      border-color: rgba(196,146,74,.35);
+    }
+    .warnings-hdr {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .warnings-hdr .label::after {
+      content: ""; margin-left: 0;
+    }
+    .warnings.alert .warnings-hdr .label::after {
+      content: "⚠"; margin-left: 6px;
+      font-size: 11px; color: var(--warn);
+      letter-spacing: 0; text-transform: none;
+    }
+    .warnings-count {
+      font-family: "Newsreader", serif; font-style: italic;
+      font-size: 11px; color: var(--muted);
+    }
+    .warnings-divider { flex: 1; height: 1px; background: var(--line); }
+    .warnings-body {
+      display: flex; flex-wrap: wrap; gap: 6px;
+    }
+    .warnings-empty {
+      font-size: 12px; color: var(--muted); font-style: italic;
+      font-family: "Newsreader", serif;
+    }
+    .warn-chip {
+      font-size: 12px; padding: 3px 9px; border-radius: 999px;
+      background: rgba(196,146,74,.10);
+      color: var(--warn);
+      border: 1px solid rgba(196,146,74,.28);
+      letter-spacing: .01em;
     }
 
     /* Reasoning panel */
@@ -305,6 +365,10 @@
     .chart-row {
       display: grid; grid-template-columns: 1.1fr 1fr;
       gap: 14px; flex: 1; min-height: 0;
+    }
+    .chart-side {
+      display: flex; flex-direction: column; gap: 14px;
+      min-height: 0;
     }
 
     /* Buttons */
@@ -828,7 +892,7 @@
 
       <div class="right">
         <div class="tiles">
-          <div class="tile">
+          <div class="tile" id="tile-moisture">
             <div class="label">Soil moisture</div>
             <div class="big" id="tile-moisture-big">—</div>
             <svg viewBox="0 0 120 6" preserveAspectRatio="none" style="width:100%;height:6px">
@@ -837,13 +901,13 @@
             </svg>
             <div class="sub" id="tile-moisture-sub">—</div>
           </div>
-          <div class="tile">
+          <div class="tile" id="tile-temp">
             <div class="label">Temperature</div>
             <div class="big" id="tile-temp-big" style="color:var(--warn)">—</div>
             <svg id="tile-temp-spark" viewBox="0 0 120 22" preserveAspectRatio="none" style="width:100%;height:22px"></svg>
             <div class="sub" id="tile-temp-sub">—</div>
           </div>
-          <div class="tile">
+          <div class="tile" id="tile-light">
             <div class="label">Grow light</div>
             <div class="big" id="tile-light-big">—</div>
             <div id="tile-light-dots" style="display:flex;gap:2px;height:8px;margin-bottom:6px"></div>
@@ -907,12 +971,24 @@
               <span class="axis-tick" id="axis-end">now</span>
             </div>
           </div>
-          <div class="reasoning">
-            <div class="reasoning-hdr">
-              <span class="label" id="reasoning-label">Reasoning log</span>
-              <span class="reasoning-divider"></span>
+          <div class="chart-side">
+            <div class="warnings" id="warnings-panel">
+              <div class="warnings-hdr">
+                <span class="label">Plant warnings</span>
+                <span class="warnings-count" id="warnings-count"></span>
+                <span class="warnings-divider"></span>
+              </div>
+              <div class="warnings-body" id="warnings-body">
+                <span class="warnings-empty">No issues observed yet.</span>
+              </div>
             </div>
-            <div class="reasoning-body" id="reasoning-list"></div>
+            <div class="reasoning">
+              <div class="reasoning-hdr">
+                <span class="label" id="reasoning-label">Reasoning log</span>
+                <span class="reasoning-divider"></span>
+              </div>
+              <div class="reasoning-body" id="reasoning-list"></div>
+            </div>
           </div>
         </div>
 
@@ -921,21 +997,18 @@
             <div class="softbtn-badge" id="water-btn-badge">💧</div>
             <div class="softbtn-text">
               <div class="softbtn-label" id="water-btn-label">Water 3s</div>
-              <div class="softbtn-sub" id="water-btn-sub">give a drink</div>
             </div>
           </button>
           <button class="softbtn cycle" id="cycle-btn" onclick="triggerCycle()">
             <div class="softbtn-badge">↻</div>
             <div class="softbtn-text">
               <div class="softbtn-label">Run cycle now</div>
-              <div class="softbtn-sub">don't wait</div>
             </div>
           </button>
           <button class="softbtn light" id="light-btn" onclick="toggleLight()">
             <div class="softbtn-badge">☀</div>
             <div class="softbtn-text">
               <div class="softbtn-label" id="light-btn-label">Light on</div>
-              <div class="softbtn-sub" id="light-btn-sub">engage the lamp</div>
             </div>
           </button>
         </div>
@@ -1174,6 +1247,11 @@
               <div class="cfg-prompt-box" id="prompt-plant-notes"></div>
               <p class="cfg-hint">Edit this text in the Plant tab above.</p>
             </div>
+            <div class="cfg-field" style="margin-top:24px">
+              <label class="cfg-label">AI model timeout (seconds)</label>
+              <input id="cfg-ai-timeout" class="cfg-input" type="number" min="30" max="3600" style="max-width:180px">
+              <p class="cfg-hint">How long to wait for the vision or reasoning model before giving up and falling back to rule-based decisions. Takes effect on the next cycle.</p>
+            </div>
             <button class="cfg-save" onclick="savePrompts()">Save prompts</button>
           </div>
         </div>
@@ -1360,6 +1438,9 @@ function render(status, cycles) {
     document.getElementById('note-desc').textContent = desc;
   }
 
+  // ── Plant warnings (visual flags from the latest cycle) ──
+  renderWarnings(latest);
+
   // ── Tiles ──
   const moistureBig = document.getElementById('tile-moisture-big');
   const mb = document.getElementById('tile-moisture-bar');
@@ -1411,6 +1492,33 @@ function render(status, cycles) {
     cycles.slice(0, 16).reverse().map(c => c.final_water),
     T.blue);
 
+  // ── Out-of-safe-range alerts on tiles ──
+  const moistureAlert = soilConnected && pct != null && (
+    (th.dry_pct != null && pct < th.dry_pct) ||
+    (th.wet_pct != null && pct > th.wet_pct)
+  );
+  document.getElementById('tile-moisture').classList.toggle('alert', !!moistureAlert);
+
+  const tempAlert = tempC != null && (
+    (th.too_cold_celsius != null && tempC < th.too_cold_celsius) ||
+    (th.too_hot_celsius  != null && tempC > th.too_hot_celsius)
+  );
+  document.getElementById('tile-temp').classList.toggle('alert', !!tempAlert);
+
+  // Light alert: on-hours today exceed safe max
+  let lightAlert = false;
+  if (th.max_on_hours_per_day != null) {
+    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+    const onCyclesToday = cycles.filter(c =>
+      c.final_light_on && new Date(c.ts).getTime() >= todayStart.getTime()
+    ).length;
+    // Each cycle represents ~1 interval of light-on; rough estimate using cycle cadence.
+    const cadenceMin = (status.config && status.config.cycle_minutes) || 15;
+    const hoursOn = (onCyclesToday * cadenceMin) / 60;
+    lightAlert = hoursOn > th.max_on_hours_per_day;
+  }
+  document.getElementById('tile-light').classList.toggle('alert', !!lightAlert);
+
   // Next cycle
   const eta = status.cycle_state.next_cycle_eta_sec;
   if (typeof eta === 'number') {
@@ -1428,26 +1536,21 @@ function render(status, cycles) {
   const lightBtn = document.getElementById('light-btn');
   lightBtn.classList.toggle('active', lightOn);
   document.getElementById('light-btn-label').textContent = lightOn ? 'Turn off light' : 'Turn on light';
-  document.getElementById('light-btn-sub').textContent =
-    lightOn ? 'lamp is on — tap to kill' : 'engage the lamp';
 
   // ── Water/pump button — reflects live valve state ──
   pumpOn = !!status.pump_on;
   const waterBtn = document.getElementById('water-btn');
   const waterLabel = document.getElementById('water-btn-label');
-  const waterSub = document.getElementById('water-btn-sub');
   const waterBadge = document.getElementById('water-btn-badge');
   waterBtn.classList.toggle('active', pumpOn);
   if (pumpOn) {
     waterLabel.textContent = 'Stop pump';
-    waterSub.textContent = 'pump running — tap to stop';
     waterBadge.textContent = '■';
   } else {
     // Show the actual pulse length the server will deliver — the manual
     // water button sends max_pulse_seconds (capped in /api/water).
     const pulse = th.max_pulse_seconds != null ? th.max_pulse_seconds : 3;
     waterLabel.textContent = `Water ${pulse}s`;
-    waterSub.textContent = 'give a drink';
     waterBadge.textContent = '💧';
   }
 
@@ -1457,13 +1560,10 @@ function render(status, cycles) {
   cycleBtn.disabled = !!active;
   cycleBtn.classList.toggle('running', !!active);
   const cycleLabel = cycleBtn.querySelector('.softbtn-label');
-  const cycleSub   = cycleBtn.querySelector('.softbtn-sub');
   if (active) {
     cycleLabel.textContent = 'Cycle running';
-    cycleSub.textContent = status.cycle_state.stage + '…';
   } else {
     cycleLabel.textContent = 'Run cycle now';
-    cycleSub.textContent = "don't wait";
   }
 
   // Loading bar
@@ -1657,18 +1757,35 @@ function renderTrends(cycles, latest, lightOn) {
   document.getElementById('axis-end').textContent   =
     now.getHours() === 23 && now.getMinutes() > 55 ? '24:00' : hm(now.toISOString());
 
-  if (!chrono.length) return;
+  if (!chrono.length) {
+    // No cycles yet — clear any stale segments left from a previous render.
+    const lightStrip = document.getElementById('sc-light-strip');
+    const waterStrip = document.getElementById('sc-water-strip');
+    lightStrip.innerHTML = '';
+    waterStrip.innerHTML = '';
+    for (let i = 0; i < 48; i++) {
+      lightStrip.appendChild(document.createElement('div'));
+      waterStrip.appendChild(document.createElement('div'));
+    }
+    document.getElementById('sc-light-cur').textContent = lightOn ? 'on now' : 'off now';
+    return;
+  }
 
   const th = (window.__lastStatus && window.__lastStatus.thresholds) || {};
   const moisture = chrono.map(c => c.soil_pct == null ? 0 : c.soil_pct);
+  const moistureClean = chrono.map(c => c.soil_pct).filter(v => v != null);
   const temp     = chrono.map(c => c.temp_celsius == null ? null : c.temp_celsius);
   const tempClean = temp.filter(v => v != null);
   const watered  = chrono.map(c => !!c.final_water);
 
-  // Moisture sub-chart
+  // Moisture sub-chart — auto-fit y-range to the actual data so small
+  // variations are readable, clamped to a sane [0, 100] envelope.
+  const mLo = moistureClean.length ? Math.min(...moistureClean) : 0;
+  const mHi = moistureClean.length ? Math.max(...moistureClean) : 100;
+  const mRange = niceYRange(mLo, mHi, { hardMin: 0, hardMax: 100, minSpan: 5 });
   drawSubChart(document.getElementById('sc-moisture'), moisture, {
     color: T.accent, fill: true,
-    yMin: 0, yMax: 100, yLabels: [0, 25, 50, 75, 100], unit: '%',
+    yMin: mRange.lo, yMax: mRange.hi, yLabels: mRange.ticks, unit: '%',
     thresholds: [
       { value: th.dry_pct ?? 30, label: `water below ${th.dry_pct ?? 30}%`, color: T.warn  },
       { value: th.wet_pct ?? 60, label: `wet ${th.wet_pct ?? 60}%`,         color: T.blue },
@@ -1679,17 +1796,18 @@ function renderTrends(cycles, latest, lightOn) {
   document.getElementById('sc-moisture-cur').textContent =
     latest && latest.soil_pct != null ? `${latest.soil_pct.toFixed(1)}%` : '—';
 
-  // Temperature sub-chart
+  // Temperature sub-chart — auto-fit y-range to data only (don't widen the
+  // window to force-include the cold/hot thresholds, or a 21°C reading ends
+  // up flat in the middle of a 13–35°C window). Threshold lines still render
+  // when they happen to fall inside the data range.
   if (tempClean.length) {
     const cold = th.too_cold_celsius ?? 15;
     const hot  = th.too_hot_celsius ?? 32;
-    const lo = Math.min(...tempClean, cold), hi = Math.max(...tempClean, hot);
-    const pad = (hi - lo) * 0.15 || 1;
-    const yLo = Math.floor(lo - pad), yHi = Math.ceil(hi + pad);
-    drawSubChart(document.getElementById('sc-temp'), temp.map(v => v == null ? yLo : v), {
+    const tRange = niceYRange(Math.min(...tempClean), Math.max(...tempClean),
+                              { minSpan: 2 });
+    drawSubChart(document.getElementById('sc-temp'), temp.map(v => v == null ? tRange.lo : v), {
       color: T.warn, dashed: true,
-      yMin: yLo, yMax: yHi,
-      yLabels: [yLo, Math.round((yLo + yHi) / 2), yHi],
+      yMin: tRange.lo, yMax: tRange.hi, yLabels: tRange.ticks,
       unit: '°',
       thresholds: [
         { value: cold, label: `cold ${cold}°`, color: T.blue },
@@ -1702,37 +1820,49 @@ function renderTrends(cycles, latest, lightOn) {
   document.getElementById('sc-temp-cur').textContent =
     latest && latest.temp_celsius != null ? `${latest.temp_celsius.toFixed(1)}°C` : '—';
 
-  // Grow-light strip — render as time-positioned blocks within the 24h window
+  // Discrete segmented strips — N buckets across the 24h window.
+  // A cycle's recorded state persists from its timestamp until the next cycle
+  // (or until "now" for the last cycle), so we fill ranges of buckets — not
+  // just the single bucket at the cycle's timestamp.
+  const N_SEGS = 48;
+  const lightOnBuckets = new Array(N_SEGS).fill(false);
+  const waterBuckets   = new Array(N_SEGS).fill(false);
+  const nowFrac = Math.min(1, (now.getTime() - winStart) / dayMs);
+  chrono.forEach((c, i) => {
+    const startIdx = Math.min(N_SEGS - 1, Math.floor(xPos[i] * N_SEGS));
+    const endFrac  = i + 1 < chrono.length ? xPos[i + 1] : nowFrac;
+    const endIdx   = Math.min(N_SEGS, Math.ceil(endFrac * N_SEGS));
+    if (c.final_light_on) {
+      for (let k = startIdx; k < endIdx; k++) lightOnBuckets[k] = true;
+    }
+    // Watering is an event, not a sustained state — keep it as a single bucket.
+    if (c.final_water && c.final_water_secs > 0) waterBuckets[startIdx] = true;
+  });
+  // If the light is on right now but no cycle has recorded it yet (gap between
+  // the last cycle's timestamp and now), reflect that with live state.
+  if (lightOn && chrono.length) {
+    const lastFrac = xPos[xPos.length - 1];
+    const startIdx = Math.min(N_SEGS - 1, Math.floor(lastFrac * N_SEGS));
+    const endIdx   = Math.min(N_SEGS, Math.ceil(nowFrac * N_SEGS));
+    for (let k = startIdx; k < endIdx; k++) lightOnBuckets[k] = true;
+  }
+
   const strip = document.getElementById('sc-light-strip');
   strip.innerHTML = '';
-  strip.style.position = 'relative';
-  chrono.forEach((c, i) => {
-    const x0 = xPos[i];
-    const x1 = i + 1 < xPos.length ? xPos[i + 1] : Math.min(1, x0 + 1 / 24);
+  strip.style.position = '';
+  lightOnBuckets.forEach(on => {
     const d = document.createElement('div');
-    d.style.cssText = `position:absolute;top:0;bottom:0;
-      left:${(x0 * 100).toFixed(2)}%;
-      width:${((x1 - x0) * 100).toFixed(2)}%;
-      background:${c.final_light_on ? T.amber : T.line};
-      opacity:${c.final_light_on ? 0.95 : 0.5}`;
+    if (on) d.className = 'on-amber';
     strip.appendChild(d);
   });
   document.getElementById('sc-light-cur').textContent = lightOn ? 'on now' : 'off now';
 
-  // Watering strip — same time-positioned layout as light, blue for watered cycles
   const waterStrip = document.getElementById('sc-water-strip');
   waterStrip.innerHTML = '';
-  waterStrip.style.position = 'relative';
-  chrono.forEach((c, i) => {
-    const x0 = xPos[i];
-    const x1 = i + 1 < xPos.length ? xPos[i + 1] : Math.min(1, x0 + 1 / 24);
+  waterStrip.style.position = '';
+  waterBuckets.forEach(on => {
     const d = document.createElement('div');
-    const watered = !!(c.final_water && c.final_water_secs > 0);
-    d.style.cssText = `position:absolute;top:0;bottom:0;
-      left:${(x0 * 100).toFixed(2)}%;
-      width:${((x1 - x0) * 100).toFixed(2)}%;
-      background:${watered ? T.blue : T.line};
-      opacity:${watered ? 0.95 : 0.4}`;
+    if (on) d.className = 'on-blue';
     waterStrip.appendChild(d);
   });
   // Count waterings today and total seconds
@@ -1741,6 +1871,36 @@ function renderTrends(cycles, latest, lightOn) {
   document.getElementById('sc-water-cur').textContent = wateredCycles.length > 0
     ? `${wateredCycles.length}× today (${totalWaterSecs.toFixed(1)}s total)`
     : 'none today';
+}
+
+// Pick a y-axis range that hugs the data so small variations are readable,
+// with light padding and rounded tick values. ``minSpan`` keeps the chart
+// from collapsing to a near-zero range when readings are very stable.
+// ``hardMin``/``hardMax`` clamp the result to a sensible envelope
+// (e.g. 0–100 for percentages).
+function niceYRange(lo, hi, opts = {}) {
+  const { minSpan = 1, hardMin = -Infinity, hardMax = Infinity } = opts;
+  if (!isFinite(lo) || !isFinite(hi)) {
+    return { lo: hardMin === -Infinity ? 0 : hardMin,
+             hi: hardMax === Infinity ? 1 : hardMax,
+             ticks: [] };
+  }
+  let span = Math.max(hi - lo, minSpan);
+  const pad = span * 0.2 || 1;
+  let yLo = lo - pad, yHi = hi + pad;
+  // Pick a step that yields ~4 gridlines.
+  const rawStep = (yHi - yLo) / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  const step = (norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10) * mag;
+  yLo = Math.max(hardMin, Math.floor(yLo / step) * step);
+  yHi = Math.min(hardMax, Math.ceil(yHi / step) * step);
+  if (yHi - yLo < minSpan) yHi = yLo + minSpan;
+  const ticks = [];
+  for (let v = yLo; v <= yHi + 1e-9; v += step) {
+    ticks.push(Number(v.toFixed(2)));
+  }
+  return { lo: yLo, hi: yHi, ticks };
 }
 
 function drawSubChart(svg, values, opts) {
@@ -1872,10 +2032,28 @@ function drawSubChart(svg, values, opts) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Reasoning log
 // ─────────────────────────────────────────────────────────────────────────────
+function renderWarnings(latest) {
+  const panel = document.getElementById('warnings-panel');
+  const body  = document.getElementById('warnings-body');
+  const count = document.getElementById('warnings-count');
+  const items = Array.isArray(latest && latest.warnings) ? latest.warnings : [];
+  if (items.length === 0) {
+    panel.classList.remove('alert');
+    count.textContent = '';
+    body.innerHTML = '<span class="warnings-empty">No issues observed.</span>';
+    return;
+  }
+  panel.classList.add('alert');
+  count.textContent = `· ${items.length} flagged`;
+  body.innerHTML = items
+    .map(w => `<span class="warn-chip">${escHtml(w)}</span>`)
+    .join('');
+}
+
 function renderReasoning(cycles) {
   const container = document.getElementById('reasoning-list');
   container.innerHTML = '';
-  cycles.slice(0, 4).forEach(c => {
+  cycles.slice(1, 5).forEach(c => {
     const row = document.createElement('div');
     row.className = 'r-row';
     let text = '';
@@ -2098,6 +2276,7 @@ async function loadCfg() {
     setSlider('cfg-water-max',       cfg.watering.max_pulse_seconds,   v => `${v}s`);
     setSlider('cfg-water-interval',  cfg.watering.min_interval_minutes, v => `${v} min`);
     setSlider('cfg-light-max',       cfg.light.max_on_hours_per_day,   v => `${v}h`);
+    document.getElementById('cfg-ai-timeout').value = cfg.ai?.timeout_seconds ?? 1000;
   } catch (e) { console.error('loadCfg', e); }
 }
 
@@ -2183,8 +2362,12 @@ async function renderPromptTab() {
 async function savePrompts() {
   const vision           = document.getElementById('prompt-vision').value;
   const reasoning_system = document.getElementById('prompt-system').value;
+  const timeout_seconds  = parseInt(document.getElementById('cfg-ai-timeout').value, 10);
   try {
-    await api('POST', '/api/prompts', { vision, reasoning_system });
+    await Promise.all([
+      api('POST', '/api/prompts', { vision, reasoning_system }),
+      api('POST', '/api/config',  { ai: { timeout_seconds } }),
+    ]);
     toast('Prompts saved — takes effect next cycle');
   } catch (e) { toast('Error: ' + e.message); }
 }

@@ -35,12 +35,22 @@ grow light on. You must reply with valid JSON matching this exact schema:
   "water": <true|false>,
   "water_seconds": <number 0–60, may be fractional like 0.5>,
   "light_on": <true|false>,
-  "reasoning": "<1–3 sentence plain-English explanation>"
+  "reasoning": "<1–3 sentence plain-English explanation>",
+  "warnings": ["<short flag>", ...]
 }
 
 Rules:
 - water_seconds must be 0 when water is false.
 - Be conservative with watering — overwatering causes root rot.
+- "warnings" is a short list (0–5 items) of visible plant-health issues drawn
+  from the visual observation. Each entry is 2–6 words, lowercase, describing
+  ONE problem. Use empty list [] when nothing is wrong. Examples of valid
+  entries: "yellowing leaves", "brown leaf tips", "drooping stem",
+  "wilting foliage", "dry cracked soil", "possible pest damage",
+  "leaf spots — possible disease", "physical damage to stem".
+  Do NOT include positive observations (e.g. "leaves look healthy") and do NOT
+  include sensor-level alerts (temperature, moisture) — those are surfaced
+  elsewhere. Only flag what you can SEE in the photo.
 - Reply with JSON only. No markdown fences, no extra keys.\
 """
 

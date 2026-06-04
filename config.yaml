@@ -90,7 +90,7 @@ ai:
   # captures and OLLAMA_MAX_LOADED_MODELS=1 (peak ~6 GB used, no swap).
   # Earlier "OOM" crashes turned out to be brownouts on an inadequate PSU.
   # Fallback to llama3.2:3b is a one-line config change if 8b ever struggles.
-  timeout_seconds: 600             # per-request timeout before fallback kicks in (llama3.1:8b runs slow on Pi CPU)
+  timeout_seconds: 1000            # per-request timeout before fallback kicks in (llama3.1:8b runs slow on Pi CPU)
 
 # ── Camera ───────────────────────────────────────────────────────────────────
 # The cycle's capture step turns the grow light on for the photo so the

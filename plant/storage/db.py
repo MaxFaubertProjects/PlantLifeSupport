@@ -28,9 +28,10 @@ cycles
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator, Sequence
@@ -74,6 +75,10 @@ _CREATE_IDX_TS = "CREATE INDEX IF NOT EXISTS idx_cycles_ts ON cycles(ts);"
 _ADD_COLUMNS = [
     ("vision_ms",    "INTEGER"),
     ("reasoning_ms", "INTEGER"),
+    # JSON-encoded list[str] of plant-health flags extracted by the reasoning
+    # model from the visual observation (e.g. ["yellowing leaves", "dry soil"]).
+    # NULL on rows recorded before this column existed.
+    ("warnings",     "TEXT"),
 ]
 
 
@@ -99,6 +104,7 @@ class Cycle:
     final_light_on: bool | None
     vision_ms: int | None = None
     reasoning_ms: int | None = None
+    warnings: list[str] = field(default_factory=list)
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Cycle":
@@ -108,6 +114,15 @@ class Cycle:
         keys = row.keys()
         def _get(k):
             return row[k] if k in keys else None
+        warnings_raw = _get("warnings")
+        if warnings_raw:
+            try:
+                parsed = json.loads(warnings_raw)
+                warnings = parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError):
+                warnings = []
+        else:
+            warnings = []
         return cls(
             id=row["id"],
             ts=row["ts"],
@@ -126,6 +141,7 @@ class Cycle:
             final_light_on=bool(row["final_light_on"]) if row["final_light_on"] is not None else None,
             vision_ms=_get("vision_ms"),
             reasoning_ms=_get("reasoning_ms"),
+            warnings=warnings,
         )
 
 
@@ -183,6 +199,7 @@ class Database:
         final_light_on: bool | None = None,
         vision_ms: int | None = None,
         reasoning_ms: int | None = None,
+        warnings: list[str] | None = None,
     ) -> int:
         """Insert a completed cycle and return its new id."""
         ts = datetime.now(timezone.utc).isoformat()
@@ -195,14 +212,14 @@ class Database:
                     ai_water, ai_water_seconds, ai_light_on, ai_reasoning,
                     used_fallback,
                     final_water, final_water_secs, final_light_on,
-                    vision_ms, reasoning_ms
+                    vision_ms, reasoning_ms, warnings
                 ) VALUES (
                     ?, ?, ?, ?, ?,
                     ?,
                     ?, ?, ?, ?,
                     ?,
                     ?, ?, ?,
-                    ?, ?
+                    ?, ?, ?
                 )
                 """,
                 (
@@ -217,6 +234,7 @@ class Database:
                     final_water_secs,
                     int(final_light_on) if final_light_on is not None else None,
                     vision_ms, reasoning_ms,
+                    json.dumps(warnings) if warnings else None,
                 ),
             )
             return cur.lastrowid  # type: ignore[return-value]
