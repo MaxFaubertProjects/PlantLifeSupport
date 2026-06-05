@@ -306,9 +306,9 @@
     }
     .warn-chip {
       font-size: 12px; padding: 3px 9px; border-radius: 999px;
-      background: rgba(196,146,74,.10);
-      color: var(--warn);
-      border: 1px solid rgba(196,146,74,.28);
+      background: var(--warn);
+      color: #fff;
+      border: 1px solid var(--warn);
       letter-spacing: .01em;
     }
 
@@ -1315,13 +1315,11 @@ async function api(method, path, body) {
 // ─────────────────────────────────────────────────────────────────────────────
 function moistureState(pct, th) {
   if (pct == null) return { tone: 'no reading', color: T.muted };
-  const dry = (th && th.dry_pct) || 30;
-  const wet = (th && th.wet_pct) || 60;
-  const mid = (dry + wet) / 2;
-  if (pct < dry - 5)   return { tone: 'thirsty',     color: T.warn };
-  if (pct < dry)       return { tone: 'a touch dry', color: T.amber };
-  if (pct < wet)       return { tone: 'just right',  color: T.accent };
-  return                      { tone: 'well watered', color: T.blue };
+  const dry = (th && th.dry_pct != null) ? th.dry_pct : 30;
+  const wet = (th && th.wet_pct != null) ? th.wet_pct : 60;
+  if (pct < dry) return { tone: 'thirsty',    color: T.warn };
+  if (pct < wet) return { tone: 'just right', color: T.accent };
+  return                { tone: 'soaked',     color: T.blue };
 }
 
 function render(status, cycles) {
