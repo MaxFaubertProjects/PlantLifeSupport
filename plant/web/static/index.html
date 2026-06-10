@@ -812,6 +812,17 @@
       .mode-chip {
         display: none;
       }
+      /* Reorder: plant warnings above trends graph */
+      .chart-row {
+        display: flex;
+        flex-direction: column;
+      }
+      .chart-side {
+        display: contents;
+      }
+      .warnings { order: 1; }
+      .trends   { order: 2; }
+      .reasoning { order: 3; }
     }
 
     /* Extra small: hide pipeline text on very narrow phones */
