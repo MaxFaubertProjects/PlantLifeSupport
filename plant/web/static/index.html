@@ -270,8 +270,8 @@
     }
 
     /* Plant warnings — what the vision model flagged about visible health.
-       Sits directly above the reasoning log so it's the first thing the eye
-       lands on when something looks off in the photo. */
+       Sits directly below the photo so it's the first thing the eye
+       lands on when something looks off. */
     .warnings {
       background: var(--surface); border: 1px solid var(--line);
       border-radius: 14px; padding: 12px 16px 12px;
@@ -366,10 +366,7 @@
       display: grid; grid-template-columns: 1.1fr 1fr;
       gap: 14px; flex: 1; min-height: 0;
     }
-    .chart-side {
-      display: flex; flex-direction: column; gap: 14px;
-      min-height: 0;
-    }
+
 
     /* Buttons */
     .controls { display: flex; gap: 12px; }
@@ -812,17 +809,6 @@
       .mode-chip {
         display: none;
       }
-      /* Reorder: plant warnings above trends graph */
-      .chart-row {
-        display: flex;
-        flex-direction: column;
-      }
-      .chart-side {
-        display: contents;
-      }
-      .warnings { order: 1; }
-      .trends   { order: 2; }
-      .reasoning { order: 3; }
     }
 
     /* Extra small: hide pipeline text on very narrow phones */
@@ -872,6 +858,16 @@
             <span class="hero-dot"></span>
             <span id="hero-time">—</span>
             <span class="hero-cid" id="hero-cid">—</span>
+          </div>
+        </div>
+        <div class="warnings" id="warnings-panel">
+          <div class="warnings-hdr">
+            <span class="label">Plant warnings</span>
+            <span class="warnings-count" id="warnings-count"></span>
+            <span class="warnings-divider"></span>
+          </div>
+          <div class="warnings-body" id="warnings-body">
+            <span class="warnings-empty">No issues observed yet.</span>
           </div>
         </div>
         <div class="note">
@@ -965,24 +961,12 @@
               <span class="axis-tick" id="axis-end">now</span>
             </div>
           </div>
-          <div class="chart-side">
-            <div class="warnings" id="warnings-panel">
-              <div class="warnings-hdr">
-                <span class="label">Plant warnings</span>
-                <span class="warnings-count" id="warnings-count"></span>
-                <span class="warnings-divider"></span>
-              </div>
-              <div class="warnings-body" id="warnings-body">
-                <span class="warnings-empty">No issues observed yet.</span>
-              </div>
+          <div class="reasoning">
+            <div class="reasoning-hdr">
+              <span class="label" id="reasoning-label">Reasoning log</span>
+              <span class="reasoning-divider"></span>
             </div>
-            <div class="reasoning">
-              <div class="reasoning-hdr">
-                <span class="label" id="reasoning-label">Reasoning log</span>
-                <span class="reasoning-divider"></span>
-              </div>
-              <div class="reasoning-body" id="reasoning-list"></div>
-            </div>
+            <div class="reasoning-body" id="reasoning-list"></div>
           </div>
         </div>
 
