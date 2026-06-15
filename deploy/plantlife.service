@@ -1,3 +1,12 @@
+# Plant Life Support — systemd unit (control loop + dashboard).
+#
+# Install:
+#   sudo cp deploy/plantlife.service /etc/systemd/system/plantlife.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now plantlife
+#
+# Deploy updates: `git pull` on the Pi; re-copy this file only when it changes.
+
 [Unit]
 Description=Plant Life Support — AI plant monitor
 After=network-online.target
@@ -6,6 +15,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=maxpi
+Group=maxpi
 WorkingDirectory=/home/maxpi/PlantLifeSupport
 # Optional secrets (e.g. PLANT_CONTROL_PASSWORD for the public dashboard).
 # The leading '-' makes it optional so the service still starts without it.
@@ -21,7 +31,6 @@ ExecStartPre=/bin/sleep 5
 # Allow uhubctl to run without a password prompt.
 # Make sure /etc/sudoers.d/uhubctl contains:
 #   maxpi ALL=(ALL) NOPASSWD: /usr/sbin/uhubctl
-# (the install step below does this automatically)
 
 StandardOutput=journal
 StandardError=journal

@@ -84,7 +84,7 @@ PlantLifeSupport/
       static/              # dashboard HTML/JS/CSS (latest photo, charts, reasoning log)
   data/                    # SQLite db + captured photos (gitignored)
   deploy/
-    plant-life-support.service   # systemd unit (autostart + auto-restart)
+    plantlife.service            # systemd unit (autostart + auto-restart)
     kiosk-setup.md               # Chromium kiosk-mode instructions for the screen
   tests/
     test_safety.py         # safety clamping/override tests
