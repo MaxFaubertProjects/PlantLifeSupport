@@ -1294,16 +1294,37 @@ function toast(msg, ms = 2500) {
 }
 
 // ── API ──
-async function api(method, path, body) {
+async function api(method, path, body, _retried) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const r = await fetch(path, opts);
+  // Controls are password-gated when the dashboard is exposed publicly.
+  // A 401 means "log in first" — prompt for the password and retry once.
+  if (r.status === 401 && !_retried && path !== '/api/login') {
+    if (await promptLogin()) return api(method, path, body, true);
+  }
   if (!r.ok) {
     let detail = '';
     try { detail = (await r.json()).detail || ''; } catch (_) {}
     throw new Error(detail || `HTTP ${r.status}`);
   }
   return r.json();
+}
+
+// Ask for the control password and exchange it for a session cookie.
+// Returns true on success. Viewing the dashboard never triggers this —
+// only control actions (water, light, config, …) hit a 401.
+async function promptLogin() {
+  const pw = window.prompt('Enter the control password to make changes:');
+  if (!pw) return false;
+  const r = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pw }),
+  });
+  if (r.ok) { toast('Controls unlocked'); return true; }
+  toast('Wrong password');
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

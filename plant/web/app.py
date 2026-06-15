@@ -13,13 +13,18 @@ POST /api/light            → set light on/off
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import logging
+import os
+import time
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -31,6 +36,10 @@ class WaterRequest(BaseModel):
 
 class LightRequest(BaseModel):
     on: bool
+
+
+class LoginRequest(BaseModel):
+    password: str
 
 
 class PlantConfigSection(BaseModel):
@@ -106,6 +115,86 @@ PHOTO_DIR_FALLBACK = Path("data/photos")
 
 def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     app = FastAPI(title="Plant Life Support", version="0.1.0")
+
+    # ── Control auth ──────────────────────────────────────────────────────────
+    # Mutating endpoints (water, light, cycle, config, prompts, clear history)
+    # are gated by a shared password so the dashboard can be exposed publicly
+    # while the plant's controls stay protected. Read endpoints stay open.
+    #
+    # The password comes from $PLANT_CONTROL_PASSWORD (preferred, kept out of
+    # git) or web.control_password in config.yaml. If neither is set, controls
+    # are left OPEN — so local/LAN use is unchanged until you opt in.
+    _COOKIE = "plant_auth"
+    _MAX_AGE = 30 * 86400  # 30 days
+
+    def _control_password() -> Optional[str]:
+        pw = os.environ.get("PLANT_CONTROL_PASSWORD")
+        if not pw:
+            pw = (cfg.get("web") or {}).get("control_password")
+        return pw or None
+
+    def _secret(password: str) -> bytes:
+        # Signing key derived from the password, so issued cookies survive a
+        # restart but are invalidated the moment the password changes.
+        return hashlib.sha256(f"plantlife-v1:{password}".encode()).digest()
+
+    def _make_token(password: str) -> str:
+        msg = base64.urlsafe_b64encode(str(int(time.time())).encode()).decode()
+        mac = hmac.new(_secret(password), msg.encode(), hashlib.sha256).hexdigest()
+        return f"{msg}.{mac}"
+
+    def _valid_token(password: str, token: Optional[str]) -> bool:
+        if not token or "." not in token:
+            return False
+        msg, _, mac = token.rpartition(".")
+        expected = hmac.new(_secret(password), msg.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(mac, expected):
+            return False
+        try:
+            issued = int(base64.urlsafe_b64decode(msg).decode())
+        except Exception:
+            return False
+        return (time.time() - issued) <= _MAX_AGE
+
+    def require_control(request: Request) -> None:
+        """Dependency: allow the request only if controls are unlocked.
+
+        No-op when no password is configured (controls open by design)."""
+        password = _control_password()
+        if not password:
+            return
+        if not _valid_token(password, request.cookies.get(_COOKIE)):
+            raise HTTPException(status_code=401, detail="Login required to control the plant")
+
+    @app.get("/api/auth")
+    async def auth_status(request: Request) -> dict[str, Any]:
+        password = _control_password()
+        if not password:
+            return {"required": False, "authed": True}
+        return {"required": True,
+                "authed": _valid_token(password, request.cookies.get(_COOKIE))}
+
+    @app.post("/api/login")
+    async def login(req: LoginRequest, request: Request):
+        password = _control_password()
+        if not password:
+            # No password configured → controls are already open.
+            return JSONResponse({"authed": True, "required": False})
+        if not hmac.compare_digest(req.password, password):
+            raise HTTPException(status_code=401, detail="Wrong password")
+        resp = JSONResponse({"authed": True, "required": True})
+        resp.set_cookie(
+            _COOKIE, _make_token(password),
+            max_age=_MAX_AGE, httponly=True, samesite="lax",
+            secure=request.url.scheme == "https", path="/",
+        )
+        return resp
+
+    @app.post("/api/logout")
+    async def logout():
+        resp = JSONResponse({"authed": False})
+        resp.delete_cookie(_COOKIE, path="/")
+        return resp
 
     # ── Static files ──────────────────────────────────────────────────────────
     if STATIC_DIR.exists():
@@ -238,7 +327,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     # ── API: clear history (destructive!) ─────────────────────────────────────
 
     @app.delete("/api/cycles")
-    async def api_cycles_clear() -> dict[str, Any]:
+    async def api_cycles_clear(_=Depends(require_control)) -> dict[str, Any]:
         """Wipe every recorded cycle and delete all stored photos.
 
         Irreversible. The UI button that calls this is gated by a JS
@@ -277,7 +366,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     # ── API: manual water ─────────────────────────────────────────────────────
 
     @app.post("/api/water")
-    async def api_water(req: WaterRequest):
+    async def api_water(req: WaterRequest, _=Depends(require_control)):
         """Trigger a manual watering pulse (capped at max_pulse_seconds)."""
         max_pulse = cfg["watering"]["max_pulse_seconds"]
         secs = max(0.5, min(req.seconds, max_pulse))
@@ -289,7 +378,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
 
     # ── API: stop water (emergency / manual override) ───────────────────────
     @app.post("/api/water/stop")
-    async def api_water_stop():
+    async def api_water_stop(_=Depends(require_control)):
         """Force the valve closed immediately. Interrupts any in-flight pulse
         because the pulse() method's relay.off() at the end is idempotent —
         the relay is already open by the time the sleep finishes."""
@@ -300,7 +389,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     # ── API: manual light ─────────────────────────────────────────────────────
 
     @app.post("/api/light")
-    async def api_light(req: LightRequest):
+    async def api_light(req: LightRequest, _=Depends(require_control)):
         """Set the grow light on or off.
 
         Defensively re-asserts the valve OFF immediately afterwards: the
@@ -317,7 +406,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     # ── API: trigger a cycle now ──────────────────────────────────────────────
 
     @app.post("/api/cycle")
-    async def api_cycle():
+    async def api_cycle(_=Depends(require_control)):
         """Run the full decision pipeline immediately (async, non-blocking)."""
         if control_loop.cycle_state.get("stage") != "idle":
             log.info("Manual cycle trigger ignored — already running")
@@ -372,7 +461,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         }
 
     @app.post("/api/config")
-    async def post_config(req: ConfigUpdateRequest) -> dict[str, Any]:
+    async def post_config(req: ConfigUpdateRequest, _=Depends(require_control)) -> dict[str, Any]:
         """Update editable config values in memory and write back to disk."""
         if req.loop_interval_minutes is not None:
             cfg["loop_interval_minutes"] = req.loop_interval_minutes
@@ -485,7 +574,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         }
 
     @app.post("/api/prompts")
-    async def post_prompts(req: PromptsUpdateRequest) -> dict[str, Any]:
+    async def post_prompts(req: PromptsUpdateRequest, _=Depends(require_control)) -> dict[str, Any]:
         """Update one or both prompts in memory and write back to config.yaml.
 
         Pass an empty string to reset a prompt to its built-in default.
