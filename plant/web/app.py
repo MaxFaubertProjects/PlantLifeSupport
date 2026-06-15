@@ -324,6 +324,19 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         db = control_loop.db
         return [_cycle_to_dict(c) for c in db.recent_cycles(limit=limit)]
 
+    # ── API: timelapse frames ─────────────────────────────────────────────────
+
+    @app.get("/api/timelapse")
+    async def api_timelapse() -> list[dict[str, Any]]:
+        """Return {ts, photo_url} for cycles that have photos, oldest first."""
+        db = control_loop.db
+        cycles = db.recent_cycles(limit=48)
+        return [
+            {"ts": c.ts, "photo_url": "/photos/" + Path(c.photo_path).name}
+            for c in reversed(cycles)
+            if c.photo_path
+        ]
+
     # ── API: clear history (destructive!) ─────────────────────────────────────
 
     @app.delete("/api/cycles")
