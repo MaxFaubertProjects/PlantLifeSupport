@@ -145,8 +145,9 @@
       flex: 1; min-height: 0; position: relative;
     }
     .hero img {
+      position: absolute; inset: 0;
       width: 100%; height: 100%; object-fit: cover; display: block;
-      transition: opacity 0.35s ease;
+      transition: opacity 0.5s ease;
     }
     .hero-meta {
       position: absolute; bottom: 12px; left: 12px;
@@ -861,6 +862,7 @@
       <div class="left">
         <div class="hero">
           <img id="hero-img" alt="latest plant photo">
+          <img id="hero-img-b" alt="" aria-hidden="true" style="opacity:0">
           <div class="hero-meta">
             <span class="hero-dot"></span>
             <span id="hero-time">—</span>
@@ -2638,36 +2640,54 @@ async function refreshSensors() {
 // ── Timelapse slideshow ───────────────────────────────────────────────────
 class TimelapsPlayer {
   constructor() {
-    this.frames  = [];   // [{ts, photo_url}] chronological
+    this.frames  = [];
     this.idx     = 0;
     this.timer   = null;
     this.playing = false;
   }
 
   async init() {
-    try {
-      this.frames = await api('GET', '/api/timelapse');
-    } catch (_) { return; }
+    try { this.frames = await api('GET', '/api/timelapse'); } catch (_) { return; }
     if (this.frames.length < 2) return;
-    // Preload all frames so crossfade is instant.
+    // Kick off background preloads — don't await, just warm the cache.
     this.frames.forEach(f => { const img = new Image(); img.src = f.photo_url; });
-    const btn = document.getElementById('tl-btn');
-    const sep = document.getElementById('tl-sep');
-    if (btn) btn.style.display = '';
-    if (sep) sep.style.display = '';
+    document.getElementById('tl-btn').style.display = '';
+    document.getElementById('tl-sep').style.display = '';
   }
 
-  _showFrame(idx) {
-    const heroImg = document.getElementById('hero-img');
-    if (!heroImg) return;
-    heroImg.style.opacity = '0';
-    setTimeout(() => {
-      heroImg.src = this.frames[idx].photo_url;
-      heroImg.style.opacity = '1';
-    }, 350);
+  // Cross-fade using two stacked <img> layers so something is always opaque.
+  // imgA (hero-img) = current visible frame.
+  // imgB (hero-img-b) = next frame, fades in on top, then gets promoted to A.
+  async _showFrame(idx) {
+    const imgA = document.getElementById('hero-img');
+    const imgB = document.getElementById('hero-img-b');
+    if (!imgA || !imgB) return;
+
     const f = this.frames[idx];
+    imgB.src = f.photo_url;
+    // Wait for the next frame to be fully decoded before starting the fade —
+    // already preloaded so this resolves in <1 ms normally.
+    try { await imgB.decode(); } catch (_) {}
+
+    // Fade imgB in over imgA — something opaque always covers the hero.
+    imgB.style.opacity = '1';
+
+    // After the transition settles, promote B→A and reset B instantly
+    // (invisible reset so the next advance starts clean).
+    setTimeout(() => {
+      imgA.src = f.photo_url;
+      imgB.style.transition = 'none';
+      imgB.style.opacity    = '0';
+      // Re-enable transition after the suppressed paint.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        imgB.style.transition = '';
+      }));
+    }, 550);
+
+    // Update caption.
+    const d = new Date(f.ts);
     document.getElementById('hero-time').textContent =
-      `Timelapse · ${new Date(f.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} ${new Date(f.ts).toLocaleDateString([], {month:'short', day:'numeric'})}`;
+      `Timelapse · ${d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} ${d.toLocaleDateString([], {month:'short', day:'numeric'})}`;
     document.getElementById('hero-cid').textContent = `· ${idx + 1}/${this.frames.length}`;
   }
 
@@ -2686,19 +2706,33 @@ class TimelapsPlayer {
   pause() {
     this.playing = false;
     clearInterval(this.timer);
-    this.timer = null;
+    this.timer   = null;
+    this.idx     = 0;
+
+    // Reset imgB instantly without triggering its transition.
+    const imgB = document.getElementById('hero-img-b');
+    if (imgB) {
+      imgB.style.transition = 'none';
+      imgB.style.opacity    = '0';
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        imgB.style.transition = '';
+      }));
+    }
+
+    // Fade imgA back to live snapshot.
+    const imgA = document.getElementById('hero-img');
+    if (imgA) {
+      imgA.style.opacity = '0';
+      setTimeout(() => {
+        imgA.src = `/api/snapshot.jpg?t=${Date.now()}`;
+        imgA.style.opacity = '1';
+      }, 50);
+    }
+
     const btn = document.getElementById('tl-btn');
     if (btn) { btn.textContent = '▶ Timelapse'; btn.classList.remove('playing'); }
-    // Restore live snapshot.
-    this.idx = 0;
-    const heroImg = document.getElementById('hero-img');
-    if (heroImg) { heroImg.style.opacity = '0'; setTimeout(() => {
-      heroImg.src = `/api/snapshot.jpg?t=${Date.now()}`;
-      heroImg.style.opacity = '1';
-    }, 350); }
-    // Restore hero label (render() will overwrite on next poll anyway).
     document.getElementById('hero-time').textContent = 'Live view';
-    document.getElementById('hero-cid').textContent = '';
+    document.getElementById('hero-cid').textContent  = '';
   }
 
   toggle() { this.playing ? this.pause() : this.play(); }
