@@ -71,6 +71,7 @@ class LightRanges(BaseModel):
 
 class AISettings(BaseModel):
     timeout_seconds: Optional[int] = None
+    temperature: Optional[float] = None
 
 
 class PromptsUpdateRequest(BaseModel):
@@ -470,6 +471,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             },
             "ai": {
                 "timeout_seconds": cfg.get("ai", {}).get("timeout_seconds", 1000),
+                "temperature":     cfg.get("ai", {}).get("temperature", 0.2),
             },
         }
 
@@ -528,6 +530,9 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             if req.ai.timeout_seconds is not None:
                 ai["timeout_seconds"] = req.ai.timeout_seconds
                 log.info("Config: ai.timeout_seconds → %d", req.ai.timeout_seconds)
+            if req.ai.temperature is not None:
+                ai["temperature"] = req.ai.temperature
+                log.info("Config: ai.temperature → %.2f", req.ai.temperature)
 
         config_path = cfg.get("_config_path")
         if config_path:

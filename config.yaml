@@ -91,6 +91,7 @@ ai:
   # Earlier "OOM" crashes turned out to be brownouts on an inadequate PSU.
   # Fallback to llama3.2:3b is a one-line config change if 8b ever struggles.
   timeout_seconds: 1000            # per-request timeout before fallback kicks in (llama3.1:8b runs slow on Pi CPU)
+  temperature: 0.2                 # reasoning model creativity: 0.2=methodical, 0.5=curious, 0.8=playful, 1.2=dramatic
 
 # ── Camera ───────────────────────────────────────────────────────────────────
 # The cycle's capture step turns the grow light on for the photo so the

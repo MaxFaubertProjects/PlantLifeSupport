@@ -576,6 +576,18 @@
       transition: color .12s, border-color .12s;
     }
     .cfg-reset-btn:hover { color: var(--ink); border-color: var(--muted); }
+    /* Mood / temperature slider */
+    .mood-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .mood-pill {
+      padding: 5px 14px; border-radius: 20px; border: 1px solid var(--line);
+      background: none; cursor: pointer; font-size: 12px; color: var(--muted);
+      font-family: inherit; transition: color .12s, border-color .12s, background .12s;
+    }
+    .mood-pill:hover { border-color: var(--accent); color: var(--accent); }
+    .mood-pill.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .ai-temp-row { display: flex; align-items: center; gap: 12px; }
+    .ai-temp-slider { flex: 1; max-width: 300px; accent-color: var(--accent); cursor: pointer; }
+    .ai-temp-val { font-size: 13px; color: var(--ink); font-variant-numeric: tabular-nums; min-width: 34px; }
     /* History tab */
     .h-row {
       padding: 16px 0; border-bottom: 1px solid var(--line);
@@ -1217,6 +1229,21 @@
               <label class="cfg-label">AI model timeout (seconds)</label>
               <input id="cfg-ai-timeout" class="cfg-input" type="number" min="30" max="3600" style="max-width:180px">
               <p class="cfg-hint">How long to wait for the vision or reasoning model before giving up and falling back to rule-based decisions. Takes effect on the next cycle.</p>
+            </div>
+            <div class="cfg-field" style="margin-top:24px">
+              <label class="cfg-label">AI personality</label>
+              <div class="mood-pills">
+                <button class="mood-pill" data-temp="0.2" onclick="setMood(this)">Methodical</button>
+                <button class="mood-pill" data-temp="0.5" onclick="setMood(this)">Curious</button>
+                <button class="mood-pill" data-temp="0.8" onclick="setMood(this)">Playful</button>
+                <button class="mood-pill" data-temp="1.2" onclick="setMood(this)">Dramatic</button>
+              </div>
+              <div class="ai-temp-row">
+                <input id="cfg-ai-temp" class="ai-temp-slider" type="range" min="0" max="1.5" step="0.05"
+                       oninput="onTempSlider(this.value)">
+                <span id="cfg-ai-temp-val" class="ai-temp-val">0.20</span>
+              </div>
+              <p class="cfg-hint">Controls the reasoning model's creativity. Lower = consistent JSON; higher = more expressive decisions. Above 1.5 may produce invalid output.</p>
             </div>
             <button class="cfg-save" onclick="savePrompts()">Save prompts</button>
           </div>
@@ -2263,6 +2290,9 @@ async function loadCfg() {
     document.getElementById('cfg-water-interval').value = cfg.watering.min_interval_minutes;
     document.getElementById('cfg-light-max').value      = cfg.light.max_on_hours_per_day;
     document.getElementById('cfg-ai-timeout').value = cfg.ai?.timeout_seconds ?? 1000;
+    const temp = cfg.ai?.temperature ?? 0.2;
+    document.getElementById('cfg-ai-temp').value = temp;
+    onTempSlider(temp);
   } catch (e) { console.error('loadCfg', e); }
 }
 
@@ -2337,13 +2367,28 @@ async function savePrompts() {
   const vision           = document.getElementById('prompt-vision').value;
   const reasoning_system = document.getElementById('prompt-system').value;
   const timeout_seconds  = parseInt(document.getElementById('cfg-ai-timeout').value, 10);
+  const temperature      = parseFloat(document.getElementById('cfg-ai-temp').value);
   try {
     await Promise.all([
       api('POST', '/api/prompts', { vision, reasoning_system }),
-      api('POST', '/api/config',  { ai: { timeout_seconds } }),
+      api('POST', '/api/config',  { ai: { timeout_seconds, temperature } }),
     ]);
     toast('Prompts saved — takes effect next cycle');
   } catch (e) { toast('Error: ' + e.message); }
+}
+
+function setMood(btn) {
+  const v = parseFloat(btn.dataset.temp);
+  document.getElementById('cfg-ai-temp').value = v;
+  onTempSlider(v);
+}
+
+function onTempSlider(val) {
+  const v = parseFloat(val);
+  document.getElementById('cfg-ai-temp-val').textContent = v.toFixed(2);
+  document.querySelectorAll('.mood-pill').forEach(p => {
+    p.classList.toggle('active', parseFloat(p.dataset.temp) === v);
+  });
 }
 
 function resetPrompt(which) {

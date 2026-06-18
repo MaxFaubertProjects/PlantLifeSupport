@@ -73,7 +73,7 @@ class ReasoningClient:
                 # Pydantic still validates the structure on our end after decoding.
                 format="json",
                 options={
-                    "temperature": 0.2,   # low temp → consistent JSON
+                    "temperature": float(self._cfg.get("ai", {}).get("temperature", 0.2)),
                     "num_ctx": 2048,      # small KV cache — our prompts are short
                 },
             )
