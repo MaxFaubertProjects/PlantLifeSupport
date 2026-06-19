@@ -174,11 +174,14 @@ def main():
                     help="repetitions per scenario (for latency stats)")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--out", default="bench_results.json")
+    ap.add_argument("--timeout", type=float, default=None,
+                    help="per-request timeout in seconds (overrides config; "
+                         "keeps a slow/stuck model from hanging the run)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     temperature = float(cfg.get("ai", {}).get("temperature", 0.2))
-    timeout = cfg.get("ai", {}).get("timeout_seconds", 1000)
+    timeout = args.timeout or cfg.get("ai", {}).get("timeout_seconds", 1000)
     host = cfg["ai"]["ollama_base_url"]
     client = ollama.Client(host=host, timeout=timeout)
 
