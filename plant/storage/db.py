@@ -24,6 +24,9 @@ cycles
   final_water      INTEGER  After safety clamping — did we water?
   final_water_secs REAL     Actual pulse duration delivered (seconds)
   final_light_on   INTEGER  Actual light state set
+
+  leaf_temp_c      REAL     Thermal camera, centre-of-view temperature
+  leaf_air_delta_c REAL     leaf_temp_c minus air temperature
 """
 
 from __future__ import annotations
@@ -79,6 +82,10 @@ _ADD_COLUMNS = [
     # model from the visual observation (e.g. ["yellowing leaves", "dry soil"]).
     # NULL on rows recorded before this column existed.
     ("warnings",     "TEXT"),
+    # Thermal camera (optional): centre-of-view leaf temperature and its
+    # difference to the air. NULL when no calibrated thermal camera.
+    ("leaf_temp_c",      "REAL"),
+    ("leaf_air_delta_c", "REAL"),
 ]
 
 
@@ -105,6 +112,8 @@ class Cycle:
     vision_ms: int | None = None
     reasoning_ms: int | None = None
     warnings: list[str] = field(default_factory=list)
+    leaf_temp_c: float | None = None
+    leaf_air_delta_c: float | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Cycle":
@@ -142,6 +151,8 @@ class Cycle:
             vision_ms=_get("vision_ms"),
             reasoning_ms=_get("reasoning_ms"),
             warnings=warnings,
+            leaf_temp_c=_get("leaf_temp_c"),
+            leaf_air_delta_c=_get("leaf_air_delta_c"),
         )
 
 
@@ -200,6 +211,8 @@ class Database:
         vision_ms: int | None = None,
         reasoning_ms: int | None = None,
         warnings: list[str] | None = None,
+        leaf_temp_c: float | None = None,
+        leaf_air_delta_c: float | None = None,
     ) -> int:
         """Insert a completed cycle and return its new id."""
         ts = datetime.now(timezone.utc).isoformat()
@@ -212,14 +225,16 @@ class Database:
                     ai_water, ai_water_seconds, ai_light_on, ai_reasoning,
                     used_fallback,
                     final_water, final_water_secs, final_light_on,
-                    vision_ms, reasoning_ms, warnings
+                    vision_ms, reasoning_ms, warnings,
+                    leaf_temp_c, leaf_air_delta_c
                 ) VALUES (
                     ?, ?, ?, ?, ?,
                     ?,
                     ?, ?, ?, ?,
                     ?,
                     ?, ?, ?,
-                    ?, ?, ?
+                    ?, ?, ?,
+                    ?, ?
                 )
                 """,
                 (
@@ -235,6 +250,7 @@ class Database:
                     int(final_light_on) if final_light_on is not None else None,
                     vision_ms, reasoning_ms,
                     json.dumps(warnings) if warnings else None,
+                    leaf_temp_c, leaf_air_delta_c,
                 ),
             )
             return cur.lastrowid  # type: ignore[return-value]

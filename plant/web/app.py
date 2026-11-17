@@ -694,4 +694,6 @@ def _cycle_to_dict(c) -> dict[str, Any]:
         "vision_ms": c.vision_ms,
         "reasoning_ms": c.reasoning_ms,
         "warnings": c.warnings,
+        "leaf_temp_c": getattr(c, "leaf_temp_c", None),
+        "leaf_air_delta_c": getattr(c, "leaf_air_delta_c", None),
     }

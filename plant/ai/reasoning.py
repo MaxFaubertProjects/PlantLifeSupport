@@ -37,6 +37,8 @@ class ReasoningClient:
         temp: TemperatureReading,
         plant_description: str,
         recent_cycles: list,
+        thermal: dict | None = None,
+        air_c: float | None = None,
     ) -> tuple[Decision, bool]:
         """Ask the LLM to make a care decision.
 
@@ -45,6 +47,8 @@ class ReasoningClient:
             temp: Current temperature reading.
             plant_description: VLM text description of the plant photo.
             recent_cycles: Recent Cycle objects from the database (newest first).
+            thermal: Calibrated thermal-camera stats, or None.
+            air_c: Real air temperature for the leaf−air difference, or None.
 
         Returns:
             A (decision, used_fallback) tuple.
@@ -55,6 +59,8 @@ class ReasoningClient:
         system, user = build_reasoning_prompt(
             self._cfg, soil, temp, plant_description, history,
             recent_cycles=recent_cycles,
+            thermal=thermal,
+            air_c=air_c,
         )
 
         try:
