@@ -1,0 +1,357 @@
+"""SQLite storage layer.
+
+One table — ``cycles`` — records everything that happened in a single
+hourly run: sensor readings, the photo path, what the AI said, the
+safety-clamped final decision, and what was actually actuated.
+
+Schema
+──────
+cycles
+  id               INTEGER  PK AUTOINCREMENT
+  ts               TEXT     ISO-8601 UTC timestamp for the cycle
+  soil_raw         INTEGER  MCP3008 raw ADC (0–1023)
+  soil_pct         REAL     Moisture percentage (0–100)
+  temp_celsius     REAL     DS18B20 temperature
+  photo_path       TEXT     Absolute path to the saved JPEG/PNG
+
+  plant_description TEXT    VLM plain-language description of the plant
+  ai_water         INTEGER  AI wanted to water? (0/1)
+  ai_water_seconds INTEGER  AI-requested watering duration
+  ai_light_on      INTEGER  AI wanted light on? (0/1)
+  ai_reasoning     TEXT     AI's natural-language reasoning
+  used_fallback    INTEGER  1 if rule-based fallback was used instead
+
+  final_water      INTEGER  After safety clamping — did we water?
+  final_water_secs REAL     Actual pulse duration delivered (seconds)
+  final_light_on   INTEGER  Actual light state set
+
+  leaf_temp_c      REAL     Thermal camera, centre-of-view temperature
+  leaf_air_delta_c REAL     leaf_temp_c minus air temperature
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Generator, Sequence
+
+
+# ── Schema ────────────────────────────────────────────────────────────────────
+
+_CREATE_CYCLES = """
+CREATE TABLE IF NOT EXISTS cycles (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               TEXT    NOT NULL,
+    soil_raw         INTEGER,
+    soil_pct         REAL,
+    temp_celsius     REAL,
+    photo_path       TEXT,
+
+    plant_description TEXT,
+    ai_water         INTEGER,
+    ai_water_seconds INTEGER,
+    ai_light_on      INTEGER,
+    ai_reasoning     TEXT,
+    used_fallback    INTEGER DEFAULT 0,
+
+    final_water      INTEGER,
+    final_water_secs REAL,
+    final_light_on   INTEGER,
+
+    -- Per-model wall-clock latency in milliseconds. NULL for cycles recorded
+    -- before this column existed, and for vision_ms when only the rule-based
+    -- fallback ran (e.g. AI unavailable).
+    vision_ms        INTEGER,
+    reasoning_ms     INTEGER
+);
+"""
+
+_CREATE_IDX_TS = "CREATE INDEX IF NOT EXISTS idx_cycles_ts ON cycles(ts);"
+
+# What happens between full checks: planned and backup waterings, light
+# switches, and the half-hourly soil readings the backup check takes.
+_CREATE_EVENTS = """
+CREATE TABLE IF NOT EXISTS events (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts        TEXT NOT NULL,
+    kind      TEXT NOT NULL,      -- reading | water | light_on | light_off | skipped
+    seconds   REAL,
+    soil_pct  REAL,
+    soil_raw  INTEGER,
+    temp_celsius REAL,
+    light_on  INTEGER,
+    source    TEXT,               -- plan | backup | ...
+    note      TEXT
+);
+"""
+_CREATE_IDX_EVENTS = "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);"
+
+# Columns added after the initial schema. Older databases don't have them, so
+# _migrate() adds any that are missing — SQLite is fine with ADD COLUMN on a
+# table with existing rows (the new column reads as NULL for old rows).
+_ADD_COLUMNS = [
+    ("vision_ms",    "INTEGER"),
+    ("reasoning_ms", "INTEGER"),
+    # JSON-encoded list[str] of plant-health flags extracted by the reasoning
+    # model from the visual observation (e.g. ["yellowing leaves", "dry soil"]).
+    # NULL on rows recorded before this column existed.
+    ("warnings",     "TEXT"),
+    # Thermal camera (optional): centre-of-view leaf temperature and its
+    # difference to the air. NULL when no calibrated thermal camera.
+    ("leaf_temp_c",      "REAL"),
+    ("leaf_air_delta_c", "REAL"),
+]
+
+
+# ── Public dataclass ──────────────────────────────────────────────────────────
+
+@dataclass
+class Cycle:
+    """A single hourly cycle record, as read from the database."""
+    id: int
+    ts: str
+    soil_raw: int | None
+    soil_pct: float | None
+    temp_celsius: float | None
+    photo_path: str | None
+    plant_description: str | None
+    ai_water: bool | None
+    ai_water_seconds: int | None
+    ai_light_on: bool | None
+    ai_reasoning: str | None
+    used_fallback: bool
+    final_water: bool | None
+    final_water_secs: float | None
+    final_light_on: bool | None
+    vision_ms: int | None = None
+    reasoning_ms: int | None = None
+    warnings: list[str] = field(default_factory=list)
+    leaf_temp_c: float | None = None
+    leaf_air_delta_c: float | None = None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "Cycle":
+        # Tolerate missing columns so the dataclass also works for any pre-
+        # migration row reads (defensive — _migrate() should already have
+        # added them at startup).
+        keys = row.keys()
+        def _get(k):
+            return row[k] if k in keys else None
+        warnings_raw = _get("warnings")
+        if warnings_raw:
+            try:
+                parsed = json.loads(warnings_raw)
+                warnings = parsed if isinstance(parsed, list) else []
+            except (json.JSONDecodeError, TypeError):
+                warnings = []
+        else:
+            warnings = []
+        return cls(
+            id=row["id"],
+            ts=row["ts"],
+            soil_raw=row["soil_raw"],
+            soil_pct=row["soil_pct"],
+            temp_celsius=row["temp_celsius"],
+            photo_path=row["photo_path"],
+            plant_description=row["plant_description"],
+            ai_water=bool(row["ai_water"]) if row["ai_water"] is not None else None,
+            ai_water_seconds=row["ai_water_seconds"],
+            ai_light_on=bool(row["ai_light_on"]) if row["ai_light_on"] is not None else None,
+            ai_reasoning=row["ai_reasoning"],
+            used_fallback=bool(row["used_fallback"]),
+            final_water=bool(row["final_water"]) if row["final_water"] is not None else None,
+            final_water_secs=row["final_water_secs"],
+            final_light_on=bool(row["final_light_on"]) if row["final_light_on"] is not None else None,
+            vision_ms=_get("vision_ms"),
+            reasoning_ms=_get("reasoning_ms"),
+            warnings=warnings,
+            leaf_temp_c=_get("leaf_temp_c"),
+            leaf_air_delta_c=_get("leaf_air_delta_c"),
+        )
+
+
+# ── Database class ────────────────────────────────────────────────────────────
+
+class Database:
+    """Thin wrapper around SQLite providing typed read/write for cycle data."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL;")  # safe for concurrent reads
+        self._conn.execute("PRAGMA foreign_keys=ON;")
+        self._migrate()
+
+    def _migrate(self) -> None:
+        self._conn.execute(_CREATE_CYCLES)
+        self._conn.execute(_CREATE_IDX_TS)
+        self._conn.execute(_CREATE_EVENTS)
+        self._conn.execute(_CREATE_IDX_EVENTS)
+        # Idempotently add later-introduced columns to pre-existing databases.
+        existing = {row["name"] for row in
+                    self._conn.execute("PRAGMA table_info(cycles)").fetchall()}
+        for name, decl in _ADD_COLUMNS:
+            if name not in existing:
+                self._conn.execute(f"ALTER TABLE cycles ADD COLUMN {name} {decl};")
+        self._conn.commit()
+
+    @contextmanager
+    def _tx(self) -> Generator[sqlite3.Connection, None, None]:
+        try:
+            yield self._conn
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    # ── Write ─────────────────────────────────────────────────────────────────
+
+    def insert_cycle(
+        self,
+        *,
+        soil_raw: int | None = None,
+        soil_pct: float | None = None,
+        temp_celsius: float | None = None,
+        photo_path: str | None = None,
+        plant_description: str | None = None,
+        ai_water: bool | None = None,
+        ai_water_seconds: int | None = None,
+        ai_light_on: bool | None = None,
+        ai_reasoning: str | None = None,
+        used_fallback: bool = False,
+        final_water: bool | None = None,
+        final_water_secs: float | None = None,
+        final_light_on: bool | None = None,
+        vision_ms: int | None = None,
+        reasoning_ms: int | None = None,
+        warnings: list[str] | None = None,
+        leaf_temp_c: float | None = None,
+        leaf_air_delta_c: float | None = None,
+    ) -> int:
+        """Insert a completed cycle and return its new id."""
+        ts = datetime.now(timezone.utc).isoformat()
+        with self._tx():
+            cur = self._conn.execute(
+                """
+                INSERT INTO cycles (
+                    ts, soil_raw, soil_pct, temp_celsius, photo_path,
+                    plant_description,
+                    ai_water, ai_water_seconds, ai_light_on, ai_reasoning,
+                    used_fallback,
+                    final_water, final_water_secs, final_light_on,
+                    vision_ms, reasoning_ms, warnings,
+                    leaf_temp_c, leaf_air_delta_c
+                ) VALUES (
+                    ?, ?, ?, ?, ?,
+                    ?,
+                    ?, ?, ?, ?,
+                    ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?
+                )
+                """,
+                (
+                    ts, soil_raw, soil_pct, temp_celsius, photo_path,
+                    plant_description,
+                    int(ai_water) if ai_water is not None else None,
+                    ai_water_seconds,
+                    int(ai_light_on) if ai_light_on is not None else None,
+                    ai_reasoning,
+                    int(used_fallback),
+                    int(final_water) if final_water is not None else None,
+                    final_water_secs,
+                    int(final_light_on) if final_light_on is not None else None,
+                    vision_ms, reasoning_ms,
+                    json.dumps(warnings) if warnings else None,
+                    leaf_temp_c, leaf_air_delta_c,
+                ),
+            )
+            return cur.lastrowid  # type: ignore[return-value]
+
+    # ── Read ──────────────────────────────────────────────────────────────────
+
+    def latest_cycle(self) -> Cycle | None:
+        """Return the most recent cycle, or None if the table is empty."""
+        row = self._conn.execute(
+            "SELECT * FROM cycles ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return Cycle.from_row(row) if row else None
+
+    def recent_cycles(self, limit: int = 48) -> Sequence[Cycle]:
+        """Return up to *limit* most-recent cycles, newest first."""
+        rows = self._conn.execute(
+            "SELECT * FROM cycles ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [Cycle.from_row(r) for r in rows]
+
+    def cycle_count(self) -> int:
+        """Total number of recorded cycles."""
+        return self._conn.execute("SELECT COUNT(*) FROM cycles").fetchone()[0]
+
+    def clear_cycles(self) -> int:
+        """Delete every cycle row and reset the autoincrement counter.
+
+        Returns the number of rows deleted. Used by the dashboard's
+        "Clear history" button — destructive and irreversible, so the
+        caller is responsible for confirmation.
+        """
+        with self._tx():
+            removed = self._conn.execute("SELECT COUNT(*) FROM cycles").fetchone()[0]
+            self._conn.execute("DELETE FROM cycles")
+            self._conn.execute("DELETE FROM events")
+            # Reset AUTOINCREMENT so the next cycle is #1 again. sqlite_sequence
+            # is only present once an AUTOINCREMENT table has been populated.
+            self._conn.execute(
+                "DELETE FROM sqlite_sequence WHERE name='cycles'"
+            )
+        return int(removed)
+
+    # ── Events (between checks) ───────────────────────────────────────────────
+
+    def insert_event(self, kind: str, *, seconds: float | None = None,
+                     soil_pct: float | None = None, soil_raw: int | None = None,
+                     temp_celsius: float | None = None, light_on: bool | None = None,
+                     source: str | None = None, note: str | None = None) -> int:
+        ts = datetime.now(timezone.utc).isoformat()
+        with self._tx():
+            cur = self._conn.execute(
+                "INSERT INTO events (ts, kind, seconds, soil_pct, soil_raw, temp_celsius,"
+                " light_on, source, note) VALUES (?,?,?,?,?,?,?,?,?)",
+                (ts, kind, seconds, soil_pct, soil_raw, temp_celsius,
+                 None if light_on is None else int(light_on), source, note))
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def events_since(self, since_iso: str) -> list[dict]:
+        """Events newer than *since_iso*, oldest first, as plain dicts."""
+        rows = self._conn.execute(
+            "SELECT * FROM events WHERE ts >= ? ORDER BY ts", (since_iso,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d.get("light_on") is not None:
+                d["light_on"] = bool(d["light_on"])
+            out.append(d)
+        return out
+
+    def last_water_event_ts(self) -> str | None:
+        row = self._conn.execute(
+            "SELECT ts FROM events WHERE kind='water' ORDER BY ts DESC LIMIT 1").fetchone()
+        return row[0] if row else None
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+# ── Module-level factory ──────────────────────────────────────────────────────
+
+def open_db(cfg: dict) -> Database:
+    """Open (or create) the database at the path configured in config.yaml."""
+    path = cfg["storage"]["db_path"]
+    return Database(path)

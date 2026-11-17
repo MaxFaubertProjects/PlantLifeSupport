@@ -1,0 +1,120 @@
+# Plant Life Support — configuration
+# All tunable parameters live here. The code reads this at startup.
+
+# ── Runtime mode ─────────────────────────────────────────────────────────────
+# "simulation" : synthetic sensors + logged actuators (Mac dev / CI)
+# "hardware"   : real Pi drivers (MCP3008 soil ADC, DS18B20, gpiozero, picamera2)
+mode: hardware
+
+# ── Schedule ─────────────────────────────────────────────────────────────────
+loop_interval_minutes: 60   # how often the decision pipeline runs
+
+# ── Plant profile (injected into every AI prompt) ─────────────────────────────
+plant:
+  name: "Monstera deliciosa"
+  species_notes: >
+    Tropical foliage plant. Prefers bright indirect light and well-draining soil.
+    Allow the top 2–3 cm of soil to dry between waterings. Sensitive to overwatering
+    (root rot) and prolonged drought. Optimal temperature 18–27 °C.
+
+# ── Soil moisture ─────────────────────────────────────────────────────────────
+# Capacitive sensor V1.2 → MCP3008 CH0 over SPI0.
+# Higher raw ADC = drier soil (same direction as resistive sensors).
+# Measured range on this probe: ~317 (water) to ~683 (dry air) at 3.3 V.
+soil:
+  # Which soil sensor to use:
+  #   "mcp3008" — real MCP3008 ADC over SPI (capacitive V1.2)
+  #   "none"    — no sensor installed; moisture reported as unavailable
+  #   "mock"    — synthetic simulation data
+  sensor: mcp3008
+
+  # ── Calibration (measure your actual probe, then update these two values) ──
+  # 1. Hold probe in open air for 30 s → note the raw ADC shown in the dashboard
+  #    → set cal_dry to that value.
+  # 2. Submerge probe in a glass of water for 30 s → note raw ADC → set cal_wet.
+  # After editing, restart the service: sudo systemctl restart plantlife
+  cal_dry: 683    # raw ADC with probe in dry air  (measured 2026-05-31)
+  cal_wet: 317    # raw ADC with probe in water     (measured 2026-05-31)
+
+  # Thresholds for the rule-based fallback — expressed as raw ADC values.
+  # With cal_dry=683 / cal_wet=317 (range 366):
+  #   573 ≈ 30 % moisture (getting dry  → water)
+  #   445 ≈ 65 % moisture (still moist  → skip)
+  # Tune via the Safety limits sliders on the dashboard after calibrating.
+  dry_threshold: 573        # above this → consider watering
+  wet_threshold: 445        # below this → soil is moist, skip watering
+
+  # Simulation: realistic range for a potted monstera
+  sim_initial: 400
+  sim_dry_rate: 10          # ADC counts lost per hour (soil drying)
+  sim_wet_effect: -80       # ADC counts gained per watering pulse
+
+# ── Temperature ───────────────────────────────────────────────────────────────
+temperature:
+  # Thresholds for safety / fallback logic
+  too_cold_celsius: 15.0    # below this → always turn light on for warmth
+  too_hot_celsius: 32.0     # above this → never water (heat stress watering risk)
+  # Simulation
+  sim_initial_celsius: 22.0
+  sim_variance_celsius: 1.5  # ± random walk per cycle
+
+# ── Watering safety limits ────────────────────────────────────────────────────
+watering:
+  max_pulse_seconds: 0.5        # hard cap on a single watering pulse — calibrate by measuring ml/pulse
+  min_interval_minutes: 90      # minimum time between two waterings
+  # If soil ADC is below wet_threshold, AI request to water is overridden OFF
+  # regardless of what the AI says.
+
+# ── Grow light limits ─────────────────────────────────────────────────────────
+light:
+  # How to drive the grow light:
+  #   "uhubctl" — USB hub power switching (temporary, no relay HAT needed)
+  #   "relay"   — gpiozero via Waveshare HAT (permanent, set light_gpio above)
+  #   "mock"    — logged-only, no real hardware (hybrid mode default)
+  control: relay
+  max_on_hours_per_day: 16      # safety cap
+
+# ── GPIO (hardware mode only) ────────────────────────────────────────────────
+# Fill these in from the relay board's silkscreen BEFORE running in hardware mode.
+gpio:
+  valve_gpio: 26       # BCM pin driving Relay 1 (pump) — Waveshare HAT pin 37
+  light_gpio: 20       # BCM pin driving Relay 2 (grow light USB) — Waveshare HAT pin 38
+  # Relay 3 (BCM 21, pin 40) spare — future use
+
+# ── AI models (Ollama) ────────────────────────────────────────────────────────
+ai:
+  ollama_base_url: "http://localhost:11434"
+  vision_model: "moondream"        # VLM: image → plant description text
+  reasoning_model: "llama3.1:8b"   # LLM: context → structured Decision JSON
+  # 8b fits in 8 GB RAM in console mode with the camera closing between
+  # captures and OLLAMA_MAX_LOADED_MODELS=1 (peak ~6 GB used, no swap).
+  # Earlier "OOM" crashes turned out to be brownouts on an inadequate PSU.
+  # Fallback to llama3.2:3b is a one-line config change if 8b ever struggles.
+  timeout_seconds: 1000            # per-request timeout before fallback kicks in (llama3.1:8b runs slow on Pi CPU)
+  temperature: 0.2                 # reasoning model creativity: 0.2=methodical, 0.5=curious, 0.8=playful, 1.2=dramatic
+
+# ── Camera ───────────────────────────────────────────────────────────────────
+# The cycle's capture step turns the grow light on for the photo so the
+# vision model sees a well-lit plant. Pi cameras need a moment for auto-
+# exposure to adapt to the lighting change — too short and the photo comes
+# out dark, too long and we waste battery/heat. Two knobs:
+#   pre_capture_light_sec — how long the light is on BEFORE the camera even
+#                           opens (gives the bulb itself time to reach
+#                           steady-state brightness).
+#   settle_seconds        — how long after opening the camera before the
+#                           frame is grabbed (lets auto-exposure converge).
+# Total light-on time per cycle ≈ pre_capture_light_sec + settle_seconds
+#                                + ~0.5s of camera open/close overhead.
+camera:
+  pre_capture_light_sec: 1.0
+  settle_seconds: 2.0
+
+# ── Storage ──────────────────────────────────────────────────────────────────
+storage:
+  db_path: "data/plant.db"
+  photo_dir: "data/photos"
+
+# ── Web dashboard ─────────────────────────────────────────────────────────────
+web:
+  host: "0.0.0.0"
+  port: 8080

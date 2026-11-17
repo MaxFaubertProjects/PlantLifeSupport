@@ -1,0 +1,40 @@
+#!/bin/sh
+# Plant Life Support — kiosk autostart for labwc/Wayland.
+# Installed at: ~/.config/labwc/autostart
+
+# Wait for the dashboard (systemd plant.service) to start listening.
+until curl -s -o /dev/null http://localhost:8080/; do
+    sleep 1
+done
+
+# Use a dedicated kiosk profile so Chromium has no saved window state to
+# restore — that's what was overriding --start-fullscreen on relaunches.
+KIOSK_PROFILE="$HOME/.config/chromium-kiosk"
+
+# Wipe the kiosk profile on every boot so Chromium can't restore a non-
+# fullscreen window state (and so "didn't shut down correctly" never shows).
+rm -rf "$KIOSK_PROFILE"
+mkdir -p "$KIOSK_PROFILE"
+
+# Launch in a respawn loop — if Chromium dies (crash, OOM, manual kill),
+# wait a moment and bring it back up.
+(
+    while true; do
+        chromium \
+            --user-data-dir="$KIOSK_PROFILE" \
+            --ozone-platform=wayland \
+            --start-fullscreen \
+            --window-position=0,0 \
+            --window-size=1920,1200 \
+            --app=http://localhost:8080/ \
+            --noerrdialogs \
+            --disable-infobars \
+            --no-first-run \
+            --disable-translate \
+            --disable-features=TranslateUI \
+            --disable-session-crashed-bubble \
+            --check-for-update-interval=31536000 \
+            --password-store=basic
+        sleep 3
+    done
+) &
