@@ -1326,7 +1326,9 @@ async function refreshSchedule() {
 // Learn from history: drying rate between waterings (overall and by light
 // state) and how much one second of watering adds.
 function learnRates(cycles) {
-  const chrono = cycles.filter(c => c.soil_pct != null).slice().reverse();
+  // Only the last week: older readings (e.g. from before a long gap) say little about today.
+  const since = Date.now() - 7 * 24 * HOUR;
+  const chrono = cycles.filter(c => c.soil_pct != null && new Date(c.ts) >= since).slice().reverse();
   const dry = [], dryOn = [], dryOff = [], gain = [];
   for (let i = 0; i + 1 < chrono.length; i++) {
     const a = chrono[i], b = chrono[i + 1];
