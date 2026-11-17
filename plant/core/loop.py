@@ -1,7 +1,8 @@
 """Hourly decision pipeline — the heart of Plant Life Support.
 
 Each cycle:
-  1. Sense    — read soil moisture + temperature
+  1. Sense    — read soil moisture + temperature (+ leaf temperature from
+                the optional USB thermal camera)
   2. See      — capture a photo
   3. Describe — VLM: photo → plant description text
   4. Reason   — LLM: context → structured Decision JSON
@@ -128,6 +129,7 @@ class ControlLoop:
                      soil.raw, soil.moisture_pct, temp_log)
         else:
             log.info("Sense: soil=unavailable (no sensor), %s", temp_log)
+        thermal = self._read_thermal()
 
         # 2. See
         self._set_stage("capturing")
@@ -176,6 +178,8 @@ class ControlLoop:
             temp=temp,
             plant_description=description,
             recent_cycles=list(recent),
+            thermal=thermal,
+            air_c=None if temp_missing else temp.celsius,
         )
         reasoning_ms = int((_time.monotonic() - _t0) * 1000)
         log.info("Reason: %s [%.1fs]",
@@ -225,6 +229,8 @@ class ControlLoop:
             vision_ms=vision_ms,
             reasoning_ms=reasoning_ms,
             warnings=safe_decision.warnings,
+            leaf_temp_c=thermal["spot_c"] if thermal else None,
+            leaf_air_delta_c=thermal.get("spot_minus_air_c") if thermal else None,
         )
 
         log.info(
@@ -234,6 +240,28 @@ class ControlLoop:
         return cycle_id
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _read_thermal(self) -> dict | None:
+        """Stats from the thermal camera, or None if absent/uncalibrated/failing.
+
+        Never raises: the thermal camera is an optional extra and must not be
+        able to stop a watering cycle.
+        """
+        cam = getattr(self.hardware, "thermal", None)
+        if cam is None or not getattr(cam, "available", False):
+            return None
+        try:
+            reading = cam.read(max_age=30)
+        except Exception as exc:
+            log.warning("Sense: thermal camera read failed — %s", exc)
+            return None
+        if not reading.calibrated:
+            log.info("Sense: thermal camera not calibrated — leaf temperature skipped")
+            return None
+        stats = reading.stats
+        log.info("Sense: leaf=%.1f°C (spot), view %.1f–%.1f°C",
+                 stats["spot_c"], stats["min_c"], stats["max_c"])
+        return stats
 
     def _photo_path(self) -> str:
         photo_dir = Path(self.cfg["storage"]["photo_dir"])

@@ -87,6 +87,40 @@ def _light_hours_today(recent_cycles) -> float:
     return hours
 
 
+def thermal_lines(thermal: dict | None, air_c: float | None) -> str:
+    """Prompt lines for the thermal camera reading, or "" when there is none.
+
+    *thermal* is the stats dict from ``ThermalReading`` (calibrated frames
+    only): ``spot_c`` is the centre of the camera's view, where the plant is
+    expected to be.
+    """
+    if not thermal or thermal.get("spot_c") is None:
+        return ""
+    spot = thermal["spot_c"]
+    line = f"  Leaf temperature (thermal camera, centre of view): {spot:.1f} °C"
+    if air_c is not None:
+        delta = spot - air_c
+        if abs(delta) < 0.3:
+            line += " (same as the air)"
+        else:
+            line += f" ({abs(delta):.1f} °C {'warmer' if delta > 0 else 'cooler'} than the air)"
+    if thermal.get("min_c") is not None and thermal.get("max_c") is not None:
+        line += f"\n  Thermal view range: {thermal['min_c']:.1f}–{thermal['max_c']:.1f} °C"
+    return line + "\n"
+
+
+THERMAL_HINT = (
+    "\n\nAbout the leaf temperature: leaves that transpire normally run a little "
+    "cooler than the air (about 0.5–3 °C); leaves at or above air temperature in "
+    "bright light can mean water stress. Succulents and cacti close their pores "
+    "during the day, so for them leaf ≈ air is normal by day and is NOT a sign of "
+    "thirst. The camera is accurate to roughly ±0.5 °C, so treat small differences "
+    "as noise and use this as a supporting clue next to soil moisture and the photo, "
+    "never as the only reason to water. Mention it in your reasoning when it is "
+    "informative."
+)
+
+
 def build_reasoning_prompt(
     cfg: dict,
     soil: SoilReading | None,
@@ -94,6 +128,8 @@ def build_reasoning_prompt(
     plant_description: str,
     recent_cycles_summary: str,
     recent_cycles: list | None = None,
+    thermal: dict | None = None,
+    air_c: float | None = None,
 ) -> tuple[str, str]:
     """Return (system_prompt, user_prompt) for the reasoning model.
 
@@ -108,6 +144,11 @@ def build_reasoning_prompt(
             (e.g. "Watered 3h ago. Light was off.").
         recent_cycles: Full cycle list used to compute light hours today.
             Optional — if omitted the light budget line is omitted.
+        thermal: Stats from a calibrated thermal-camera frame (``spot_c``,
+            ``min_c``, ``max_c`` …), or None when there is no camera or it is
+            not calibrated — the leaf-temperature lines are then left out.
+        air_c: The real air temperature, for the leaf−air difference. None
+            when the probe is missing (``temp`` may be a neutral stand-in).
 
     Returns:
         A (system, user) tuple ready to pass to the Ollama chat API.
@@ -180,7 +221,7 @@ Species notes: {plant['species_notes'].strip()}
 Current sensor readings:
 {soil_reading_line}
   Temperature: {temp.celsius:.1f} °C
-{light_budget_line}
+{thermal_lines(thermal, air_c)}{light_budget_line}
 
 Visual observation:
   {plant_description.strip()}
@@ -196,7 +237,7 @@ Safety guardrails (these clamp your decision — you can reason within them free
   • Min interval between waterings: {watering['min_interval_minutes']} minutes
   • Max light on per day: {light['max_on_hours_per_day']} hours
 
-You are autonomous within these guardrails. {judgement_hint}
+You are autonomous within these guardrails. {judgement_hint}{THERMAL_HINT if thermal_lines(thermal, air_c) else ""}
 
 Decide: should the plant be watered this cycle? Should the grow light be on?
 Reply with JSON only.\

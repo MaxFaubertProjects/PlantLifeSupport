@@ -217,13 +217,13 @@
     }
     .th-panel { display: none; }
     .thermal.big { top: 0; right: 0; width: 100%; height: 100%; border-radius: 0; border-width: 0; cursor: default; }
-    .thermal.big img { cursor: zoom-out; right: 186px; width: auto; }
+    .thermal.big img { cursor: zoom-out; width: calc(100% - 186px); }
     .thermal.big .th-badge, .thermal.big .th-tag { display: none; }
     .thermal.big .th-panel {
       display: flex; flex-direction: column; gap: 8px;
       position: absolute; top: 10px; right: 10px; bottom: 10px; width: 170px;
       background: rgba(30,42,34,.92); color: var(--rail-ink);
-      border: 1px solid var(--rail-line); border-radius: 12px; padding: 12px; font-size: 12px; overflow-y: auto;
+      border: 1px solid var(--rail-line); border-radius: 12px; padding: 12px; font-size: 12px; overflow-y: auto; white-space: normal;
     }
     .th-title { display: flex; align-items: center; gap: 6px; font-size: 10.5px; letter-spacing: .09em;
                 text-transform: uppercase; font-weight: 600; color: var(--rail-muted); }
@@ -245,7 +245,7 @@
     .th-btn .ic { width: 13px; height: 13px; }
     @media (max-width: 599px) {
       .thermal { width: 96px; height: 96px; }
-      .thermal.big img { right: 0; bottom: 0; height: 100%; width: 100%; }
+      .thermal.big img { width: 100%; height: 38%; }
       .thermal.big .th-panel { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 62%;
                                 display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
       .thermal.big .th-panel > .th-title, .thermal.big .th-panel > .th-note,
@@ -739,6 +739,7 @@
           <div class="th-note" id="th-note"></div>
           <div class="spacer"></div>
           <button class="th-btn primary" onclick="thermal.calibrate()"><svg class="ic"><use href="#i-target"/></svg>Calibrate</button>
+          <button class="th-btn" onclick="thermal.rotate()"><svg class="ic"><use href="#i-cycle"/></svg>Rotate 90°</button>
           <button class="th-btn" onclick="thermal.toggle()"><svg class="ic"><use href="#i-back"/></svg>Back to photo</button>
         </div>
       </div>
@@ -1088,6 +1089,7 @@
             <div class="instrument-status" id="dbg-th-status">Checking…</div>
             <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
               <button class="th-btn primary" onclick="thermal.calibrate()"><svg class="ic"><use href="#i-target"/></svg>Calibrate thermal camera</button>
+              <button class="th-btn" onclick="thermal.rotate()"><svg class="ic"><use href="#i-cycle"/></svg>Rotate image 90°</button>
             </div>
           </div>
         </div>
@@ -2194,6 +2196,10 @@ function renderHistory() {
       ].join('') || '<span class="h-action">no action</span>';
       const soilTxt = c.soil_pct != null ? `<span class="h-sensor-val">${c.soil_pct.toFixed(1)}%</span>` : '<span>—</span>';
       const tempTxt = c.temp_celsius != null ? `<span class="h-sensor-val">${c.temp_celsius.toFixed(1)}°C</span>` : '<span>—</span>';
+      // Leaf temperature from the thermal camera (null when it wasn't connected).
+      const leafTxt = c.leaf_temp_c != null
+        ? `<span>leaf <span class="h-sensor-val">${c.leaf_temp_c.toFixed(1)}°C</span>${c.leaf_air_delta_c != null
+            ? ` (${c.leaf_air_delta_c > 0 ? '+' : ''}${c.leaf_air_delta_c.toFixed(1)}° vs air)` : ''}</span>` : '';
       const actionParts = [];
       if (c.final_water) actionParts.push(`watered <b>${(c.final_water_secs || 0).toFixed(1)}s</b>`);
       actionParts.push(c.final_light_on ? 'light <b>on</b>' : 'light <b>off</b>');
@@ -2209,7 +2215,7 @@ function renderHistory() {
           <div class="h-chips">${chips}</div>
         </div>
         <div class="h-body">
-          <div class="h-sensors"><span>soil ${soilTxt}</span><span>temp ${tempTxt}</span>${sourceBadge}</div>
+          <div class="h-sensors"><span>soil ${soilTxt}</span><span>temp ${tempTxt}</span>${leafTxt}${sourceBadge}</div>
           <div class="h-text">${escHtml(stripPrefix(c.ai_reasoning) || '—')}</div>
           <div class="h-latency">${latencyLine}</div>
           <div class="h-action">Action: ${actionParts.join(' · ')}</div>
@@ -2438,6 +2444,14 @@ const thermal = {
     else if (!t.available) st.textContent = `Not available${t.reason ? ` (${t.reason})` : ''}. Plug the USB thermal camera in and it appears in the photo's corner.`;
     else if (!t.calibrated) st.textContent = 'Connected, not calibrated. Point it at a blank wall (or a card ~1 cm from the lens) and press Calibrate.';
     else st.textContent = `Connected and calibrated. Spot ${t.spot_c?.toFixed(1)}° · min ${t.min_c?.toFixed(1)}° · max ${t.max_c?.toFixed(1)}° · air ${t.air_c == null ? '—' : t.air_c.toFixed(1) + '°'}.`;
+  },
+
+  async rotate() {
+    try {
+      const r = await api('POST', '/api/thermal/rotate');
+      toast(`Thermal image rotated to ${r.rotation}°`);
+      this.render(await api('GET', '/api/thermal'));
+    } catch (e) { toast('Error: ' + e.message); }
   },
 
   async calibrate() {

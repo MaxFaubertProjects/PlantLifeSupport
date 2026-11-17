@@ -118,3 +118,7 @@ class Hardware:
     camera: Camera
     valve: ValveActuator
     light: LightActuator
+    # Optional USB thermal camera (plant/hardware/thermal.py). None when the
+    # feature is disabled; the driver itself reports `available = False`
+    # while the camera is unplugged.
+    thermal: object | None = None
