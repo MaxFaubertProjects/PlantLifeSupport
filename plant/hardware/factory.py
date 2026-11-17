@@ -61,6 +61,35 @@ def _build_light_actuator(cfg: dict):
     return RealLightActuator(gpio_pin=gpio_pin)
 
 
+def _attach_thermal(hw: Hardware, cfg: dict, mock: bool = False) -> Hardware:
+    """Attach the optional USB thermal camera to *hw*.
+
+    ``thermal.enabled`` in config: ``auto`` (default — attach on the Pi; the
+    driver shows "not connected" until the camera is plugged in), ``true``,
+    or ``false``. The DS18B20 air temperature is passed in as the
+    calibration reference and for the leaf−air difference.
+    """
+    enabled = str((cfg.get("thermal", {}) or {}).get("enabled", "auto")).lower()
+    if enabled in ("false", "no", "off", "0"):
+        return hw
+
+    def air_temp():
+        r = hw.temperature.read()
+        return r.celsius if r else None
+
+    try:
+        if mock:
+            from plant.hardware.thermal import MockThermalCamera
+            hw.thermal = MockThermalCamera(cfg, air_temp=air_temp)
+        else:
+            from plant.hardware.thermal import ThermalCamera
+            hw.thermal = ThermalCamera(cfg, air_temp=air_temp)
+            log.info("Thermal camera: %s", hw.thermal.device or "not connected")
+    except Exception as exc:  # never let an optional sensor stop the service
+        log.warning("Thermal camera disabled — %s", exc)
+    return hw
+
+
 def get_hardware(cfg: dict) -> Hardware:
     """Return a Hardware bundle appropriate for the configured mode.
 
@@ -79,7 +108,7 @@ def get_hardware(cfg: dict) -> Hardware:
     if mode == "simulation":
         from plant.hardware.mock import build_mock_hardware
         log.info("Hardware mode: SIMULATION (mock drivers)")
-        return build_mock_hardware(cfg)
+        return _attach_thermal(build_mock_hardware(cfg), cfg, mock=True)
 
     # Shared kwargs for RealCamera — picked up from the optional `camera:`
     # section in config.yaml. Defaults match the original hardcoded values.
@@ -95,13 +124,13 @@ def get_hardware(cfg: dict) -> Hardware:
         )
         gpio = cfg["gpio"]
         log.info("Hardware mode: REAL (Pi drivers)")
-        return Hardware(
+        return _attach_thermal(Hardware(
             soil=_build_soil_sensor(cfg),
             temperature=RealTemperatureSensor(),
             camera=RealCamera(**cam_kwargs),
             valve=RealValveActuator(gpio_pin=gpio["valve_gpio"]),
             light=_build_light_actuator(cfg),
-        )
+        ), cfg)
 
     if mode == "hybrid":
         from plant.hardware.mock import (
@@ -115,13 +144,13 @@ def get_hardware(cfg: dict) -> Hardware:
         # or null soil sensor there is nothing to simulate.
         sim_soil = soil if isinstance(soil, MockSoilSensor) else None
         light = _build_light_actuator(cfg) if control != "mock" else MockLightActuator()
-        return Hardware(
+        return _attach_thermal(Hardware(
             soil=soil,
             temperature=RealTemperatureSensor(),
             camera=RealCamera(**cam_kwargs),
             valve=MockValveActuator(soil_sensor=sim_soil),
             light=light,
-        )
+        ), cfg)
 
     raise ValueError(
         f"Unknown mode {mode!r} in config.yaml — must be 'simulation', 'hybrid', or 'hardware'."

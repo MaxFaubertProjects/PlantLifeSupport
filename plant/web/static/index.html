@@ -835,6 +835,80 @@
     @media (max-width: 399px) {
       .pipeline-intro, .pipe-label { display: none; }
     }
+    /* ── Thermal camera ─────────────────────────────────────────────────
+       Lives inside .hero: a picture-in-picture thumbnail in the top-right
+       corner; clicking it expands to cover the whole photo area. */
+    .thermal {
+      position: absolute; top: 12px; right: 12px; z-index: 3;
+      width: 128px; height: 128px;
+      border-radius: 12px; overflow: hidden; cursor: pointer;
+      background: #14110f; border: 2px solid rgba(255,255,255,.9);
+      box-shadow: 0 4px 14px rgba(0,0,0,.25);
+      transition: all .25s ease;
+    }
+    .thermal[hidden] { display: none; }
+    .thermal img {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: contain; image-rendering: auto; display: block;
+    }
+    .thermal.uncal img { opacity: .35; }
+    .th-cross {
+      position: absolute; left: 50%; top: 50%; width: 14px; height: 14px;
+      transform: translate(-50%, -50%); pointer-events: none;
+      border: 1.5px solid rgba(255,255,255,.85); border-radius: 50%;
+    }
+    .th-hot {
+      position: absolute; width: 8px; height: 8px; pointer-events: none;
+      transform: translate(-50%, -50%); border-radius: 50%;
+      border: 1.5px solid #fff; background: rgba(196,90,74,.8); display: none;
+    }
+    .th-badge {
+      position: absolute; left: 6px; bottom: 6px;
+      background: rgba(20,17,15,.72); color: #fff;
+      font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px;
+      font-family: "DM Mono", monospace;
+    }
+    .th-panel { display: none; }
+    .thermal.big {
+      top: 0; right: 0; width: 100%; height: 100%;
+      border-radius: 0; border: none; box-shadow: none; cursor: default;
+    }
+    .thermal.big img { cursor: zoom-out; }
+    .thermal.big .th-badge { display: none; }
+    .thermal.big .th-panel {
+      display: flex; flex-direction: column; gap: 8px;
+      position: absolute; top: 12px; right: 12px; width: 150px;
+      background: rgba(20,17,15,.78); backdrop-filter: blur(6px);
+      color: #f5f1e8; border-radius: 12px; padding: 10px 12px;
+      font-size: 12px;
+    }
+    .th-title {
+      font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+      font-weight: 600; color: rgba(245,241,232,.7);
+    }
+    .th-row { display: flex; justify-content: space-between; gap: 8px; }
+    .th-row span:last-child { font-family: "DM Mono", monospace; }
+    .th-scale {
+      height: 8px; border-radius: 4px;
+      background: linear-gradient(90deg, #000004, #280b54, #65156e, #9f2a63,
+                  #d44842, #f57d15, #fac127, #fcffa4);
+    }
+    .th-scale-lbl {
+      display: flex; justify-content: space-between;
+      font-family: "DM Mono", monospace; font-size: 10px;
+      color: rgba(245,241,232,.75); margin-top: -4px;
+    }
+    .th-note { font-size: 10px; color: rgba(245,241,232,.65); line-height: 1.35; }
+    .th-btn {
+      background: rgba(245,241,232,.12); color: #f5f1e8;
+      border: 1px solid rgba(245,241,232,.25); border-radius: 8px;
+      padding: 5px 8px; font-size: 11px; cursor: pointer;
+    }
+    .th-btn:hover { background: rgba(245,241,232,.22); }
+    @media (max-width: 599px) {
+      .thermal { width: 96px; height: 96px; }
+      .thermal.big .th-panel { width: 132px; padding: 8px 10px; }
+    }
   </style>
 </head>
 <body>
@@ -881,6 +955,22 @@
             <span class="hero-cid" id="hero-cid">—</span>
             <span id="tl-sep" style="display:none;color:var(--muted)">·</span>
             <button class="tl-btn" id="tl-btn" style="display:none" onclick="timelapse.toggle()">▶ Timelapse</button>
+          </div>
+          <div class="thermal" id="thermal" hidden title="Thermal camera — click to enlarge">
+            <img id="thermal-img" alt="thermal image" onclick="thermal.toggle()">
+            <div class="th-cross"></div>
+            <div class="th-hot" id="th-hot"></div>
+            <div class="th-badge" id="th-badge">—</div>
+            <div class="th-panel">
+              <div class="th-title">Thermal</div>
+              <div id="th-stats"></div>
+              <div class="th-scale"></div>
+              <div class="th-scale-lbl"><span id="th-lo">—</span><span id="th-hi">—</span></div>
+              <div class="th-note" id="th-note"></div>
+              <button class="th-btn" onclick="thermal.calibrate()">Calibrate</button>
+              <button class="th-btn" onclick="thermal.rotate()">↻ Rotate</button>
+              <button class="th-btn" onclick="thermal.toggle()">◀ Back to photo</button>
+            </div>
           </div>
         </div>
         <div class="warnings" id="warnings-panel">
@@ -2784,11 +2874,111 @@ class TimelapsPlayer {
 }
 const timelapse = new TimelapsPlayer();
 
+// ── Thermal camera ────────────────────────────────────────────────────────
+// Polls /api/thermal and draws it as a thumbnail in the hero's corner;
+// clicking expands it over the photo with stats + a colour scale. The ring
+// in the middle is the "spot" measurement, the red dot the hottest pixel.
+const THERMAL_REFRESH_MS = 5000;
+const thermal = {
+  big: false,
+  last: null,
+
+  toggle() {
+    this.big = !this.big;
+    document.getElementById('thermal').classList.toggle('big', this.big);
+    document.getElementById('thermal').title = this.big ? '' : 'Thermal camera — click to enlarge';
+  },
+
+  async refresh() {
+    try {
+      const t = await api('GET', '/api/thermal');
+      this.render(t);
+    } catch (_) { /* keep last frame */ }
+    setTimeout(() => this.refresh(), THERMAL_REFRESH_MS);
+  },
+
+  render(t) {
+    const box = document.getElementById('thermal');
+    if (!t.available) { box.hidden = true; if (this.big) this.toggle(); return; }
+    box.hidden = false;
+    this.last = t;
+    document.getElementById('thermal-img').src = t.image;
+    box.classList.toggle('uncal', !t.calibrated);
+
+    const f = v => (v == null ? '—' : `${v.toFixed(1)}°`);
+    const hot = document.getElementById('th-hot');
+    const note = document.getElementById('th-note');
+
+    if (!t.calibrated) {
+      document.getElementById('th-badge').textContent = 'Calibrate';
+      document.getElementById('th-stats').innerHTML = '';
+      document.getElementById('th-lo').textContent = '';
+      document.getElementById('th-hi').textContent = '';
+      hot.style.display = 'none';
+      note.textContent = 'Not calibrated yet. Point the camera at a blank wall '
+        + '(or hold a card just in front of the lens) and press Calibrate.';
+      return;
+    }
+
+    document.getElementById('th-badge').textContent = f(t.spot_c);
+    const d = t.spot_minus_air_c;
+    const rows = [
+      ['Spot', f(t.spot_c)],
+      ['Min', f(t.min_c)],
+      ['Max', f(t.max_c)],
+      ['Air', f(t.air_c)],
+      ['Spot − air', d == null ? '—' : `${d > 0 ? '+' : ''}${d.toFixed(1)}°`],
+    ];
+    document.getElementById('th-stats').innerHTML = rows.map(([k, v]) =>
+      `<div class="th-row"><span>${k}</span><span>${v}</span></div>`).join('');
+    document.getElementById('th-lo').textContent = f(t.scale_lo_c);
+    document.getElementById('th-hi').textContent = f(t.scale_hi_c);
+
+    // Hot-spot marker, positioned over the (square, contained) image.
+    const img = document.getElementById('thermal-img');
+    const side = Math.min(img.clientWidth, img.clientHeight);
+    const ox = (img.clientWidth - side) / 2, oy = (img.clientHeight - side) / 2;
+    hot.style.left = `${ox + (t.hot_xy[0] + 0.5) / 100 * side}px`;
+    hot.style.top  = `${oy + (t.hot_xy[1] + 0.5) / 100 * side}px`;
+    hot.style.display = 'block';
+
+    const ageH = (Date.now() / 1000 - t.calibrated_at) / 3600;
+    const age = ageH < 1 ? `${Math.max(1, Math.round(ageH * 60))} min` :
+                ageH < 48 ? `${Math.round(ageH)} h` : `${Math.round(ageH / 24)} d`;
+    note.textContent = `Calibrated ${age} ago${t.calibration_ref_assumed
+      ? ' (air temp unknown, assumed 22°)' : ''}. Recalibrate if the numbers drift.`;
+  },
+
+  async rotate() {
+    try {
+      const r = await api('POST', '/api/thermal/rotate');
+      toast(`Thermal image rotated to ${r.rotation}°`);
+      this.render(await api('GET', '/api/thermal'));
+    } catch (e) { toast('Error: ' + e.message); }
+  },
+
+  async calibrate() {
+    const ok = window.confirm(
+      'Calibrate the thermal camera\n\n'
+      + 'Point it at a blank wall, or hold a piece of card about 1 cm in front '
+      + 'of the lens, then press OK and keep it still for 3 seconds.');
+    if (!ok) return;
+    try {
+      toast('Calibrating… keep it still');
+      await api('POST', '/api/thermal/calibrate');
+      toast('Thermal camera calibrated');
+      const t = await api('GET', '/api/thermal');
+      this.render(t);
+    } catch (e) { toast('Error: ' + e.message); }
+  },
+};
+
 // ── Boot ──
 refresh();
 refreshSnapshot();
 refreshSensors();
 timelapse.init();
+thermal.refresh();
 </script>
 </body>
 </html>

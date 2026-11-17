@@ -251,6 +251,53 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             },
         )
 
+    # ── API: thermal camera ───────────────────────────────────────────────────
+
+    @app.get("/api/thermal")
+    async def api_thermal() -> dict[str, Any]:
+        """Latest thermal frame as a false-colour PNG (data URL) + stats in °C.
+
+        Frames are cached for a few seconds inside the driver, so several
+        dashboards polling at once share one capture. Returns
+        ``available: false`` (HTTP 200) when the camera is unplugged so the
+        dashboard can show a calm "not connected" state instead of an error.
+        """
+        cam = getattr(hardware, "thermal", None)
+        if cam is None:
+            return {"available": False, "reason": "disabled"}
+        if not cam.available:
+            return {"available": False, "reason": "not connected"}
+        try:
+            reading = await asyncio.get_event_loop().run_in_executor(None, cam.read)
+        except Exception as exc:
+            log.warning("thermal read failed: %s", exc)
+            return {"available": False, "reason": f"read failed: {exc}"}
+        return {"available": True, **reading.to_api()}
+
+    @app.post("/api/thermal/calibrate")
+    async def api_thermal_calibrate(_=Depends(require_control)) -> dict[str, Any]:
+        """Store the flat-field reference. Point the camera at something of
+        uniform temperature (a blank wall, a card held just in front of the
+        lens) before calling — takes ~2 s."""
+        cam = getattr(hardware, "thermal", None)
+        if cam is None or not cam.available:
+            raise HTTPException(status_code=503, detail="thermal camera not connected")
+        try:
+            info = await asyncio.get_event_loop().run_in_executor(None, cam.calibrate)
+        except Exception as exc:
+            log.warning("thermal calibration failed: %s", exc)
+            raise HTTPException(status_code=500, detail=f"calibration failed: {exc}")
+        return {"ok": True, **info}
+
+    @app.post("/api/thermal/rotate")
+    async def api_thermal_rotate(_=Depends(require_control)) -> dict[str, Any]:
+        """Turn the thermal image a further 90° clockwise (saved on the Pi)."""
+        cam = getattr(hardware, "thermal", None)
+        if cam is None or not hasattr(cam, "rotate"):
+            raise HTTPException(status_code=503, detail="thermal camera not available")
+        info = await asyncio.get_event_loop().run_in_executor(None, cam.rotate)
+        return {"ok": True, **info}
+
     # ── API: status ───────────────────────────────────────────────────────────
 
     @app.get("/api/status")
@@ -302,6 +349,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             "soil":        getattr(hardware.soil, "available", True),
             "temperature": getattr(hardware.temperature, "available", True),
             "camera":      getattr(hardware.camera, "available", True),
+            "thermal":     bool(getattr(getattr(hardware, "thermal", None), "available", False)),
         }
 
         return {
