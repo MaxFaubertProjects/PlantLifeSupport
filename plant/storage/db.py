@@ -72,6 +72,24 @@ CREATE TABLE IF NOT EXISTS cycles (
 
 _CREATE_IDX_TS = "CREATE INDEX IF NOT EXISTS idx_cycles_ts ON cycles(ts);"
 
+# What happens between full checks: planned and backup waterings, light
+# switches, and the half-hourly soil readings the backup check takes.
+_CREATE_EVENTS = """
+CREATE TABLE IF NOT EXISTS events (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts        TEXT NOT NULL,
+    kind      TEXT NOT NULL,      -- reading | water | light_on | light_off | skipped
+    seconds   REAL,
+    soil_pct  REAL,
+    soil_raw  INTEGER,
+    temp_celsius REAL,
+    light_on  INTEGER,
+    source    TEXT,               -- plan | backup | ...
+    note      TEXT
+);
+"""
+_CREATE_IDX_EVENTS = "CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);"
+
 # Columns added after the initial schema. Older databases don't have them, so
 # _migrate() adds any that are missing — SQLite is fine with ADD COLUMN on a
 # table with existing rows (the new column reads as NULL for old rows).
@@ -173,6 +191,8 @@ class Database:
     def _migrate(self) -> None:
         self._conn.execute(_CREATE_CYCLES)
         self._conn.execute(_CREATE_IDX_TS)
+        self._conn.execute(_CREATE_EVENTS)
+        self._conn.execute(_CREATE_IDX_EVENTS)
         # Idempotently add later-introduced columns to pre-existing databases.
         existing = {row["name"] for row in
                     self._conn.execute("PRAGMA table_info(cycles)").fetchall()}
@@ -285,12 +305,45 @@ class Database:
         with self._tx():
             removed = self._conn.execute("SELECT COUNT(*) FROM cycles").fetchone()[0]
             self._conn.execute("DELETE FROM cycles")
+            self._conn.execute("DELETE FROM events")
             # Reset AUTOINCREMENT so the next cycle is #1 again. sqlite_sequence
             # is only present once an AUTOINCREMENT table has been populated.
             self._conn.execute(
                 "DELETE FROM sqlite_sequence WHERE name='cycles'"
             )
         return int(removed)
+
+    # ── Events (between checks) ───────────────────────────────────────────────
+
+    def insert_event(self, kind: str, *, seconds: float | None = None,
+                     soil_pct: float | None = None, soil_raw: int | None = None,
+                     temp_celsius: float | None = None, light_on: bool | None = None,
+                     source: str | None = None, note: str | None = None) -> int:
+        ts = datetime.now(timezone.utc).isoformat()
+        with self._tx():
+            cur = self._conn.execute(
+                "INSERT INTO events (ts, kind, seconds, soil_pct, soil_raw, temp_celsius,"
+                " light_on, source, note) VALUES (?,?,?,?,?,?,?,?,?)",
+                (ts, kind, seconds, soil_pct, soil_raw, temp_celsius,
+                 None if light_on is None else int(light_on), source, note))
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def events_since(self, since_iso: str) -> list[dict]:
+        """Events newer than *since_iso*, oldest first, as plain dicts."""
+        rows = self._conn.execute(
+            "SELECT * FROM events WHERE ts >= ? ORDER BY ts", (since_iso,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d.get("light_on") is not None:
+                d["light_on"] = bool(d["light_on"])
+            out.append(d)
+        return out
+
+    def last_water_event_ts(self) -> str | None:
+        row = self._conn.execute(
+            "SELECT ts FROM events WHERE kind='water' ORDER BY ts DESC LIMIT 1").fetchone()
+        return row[0] if row else None
 
     def close(self) -> None:
         self._conn.close()

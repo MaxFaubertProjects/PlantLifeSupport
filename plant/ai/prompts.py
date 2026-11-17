@@ -130,6 +130,7 @@ def build_reasoning_prompt(
     recent_cycles: list | None = None,
     thermal: dict | None = None,
     air_c: float | None = None,
+    schedule_note: str | None = None,
 ) -> tuple[str, str]:
     """Return (system_prompt, user_prompt) for the reasoning model.
 
@@ -239,7 +240,7 @@ Safety guardrails (these clamp your decision — you can reason within them free
 
 You are autonomous within these guardrails. {judgement_hint}{THERMAL_HINT if thermal_lines(thermal, air_c) else ""}
 
-Decide: should the plant be watered this cycle? Should the grow light be on?
+{(schedule_note.strip() + chr(10) + chr(10)) if schedule_note else ""}Decide: should the plant be watered this cycle? Should the grow light be on?
 Reply with JSON only.\
 """
     return get_reasoning_system(cfg), user

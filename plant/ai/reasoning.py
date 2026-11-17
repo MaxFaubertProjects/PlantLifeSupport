@@ -39,6 +39,7 @@ class ReasoningClient:
         recent_cycles: list,
         thermal: dict | None = None,
         air_c: float | None = None,
+        schedule_note: str | None = None,
     ) -> tuple[Decision, bool]:
         """Ask the LLM to make a care decision.
 
@@ -61,6 +62,7 @@ class ReasoningClient:
             recent_cycles=recent_cycles,
             thermal=thermal,
             air_c=air_c,
+            schedule_note=schedule_note,
         )
 
         try:

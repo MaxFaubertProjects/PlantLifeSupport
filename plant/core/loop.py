@@ -1,6 +1,8 @@
-"""Hourly decision pipeline — the heart of Plant Life Support.
+"""Decision pipeline — the heart of Plant Life Support.
 
-Each cycle:
+A full check runs a few times a day at fixed times (``schedule.checks_per_day``
+starting at ``schedule.first_check`` — default 08:00 and 20:00, see
+plant/core/schedule.py). Each check:
   1. Sense    — read soil moisture + temperature (+ leaf temperature from
                 the optional USB thermal camera)
   2. See      — capture a photo
@@ -9,11 +11,18 @@ Each cycle:
   5. Validate — safety.py clamps / overrides the decision
   6. Act      — pulse the valve; set the light
   7. Record   — persist everything to SQLite
+  8. Plan     — schedule light switches and waterings until the next check,
+                with a moisture forecast (served at /api/schedule)
+
+Between checks a light runner carries out the plan, and every 30 minutes
+reads the soil (cheap — no camera, no models). If the soil is already below
+the dry line it waters anyway (backup), through the same safety layer.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
@@ -24,6 +33,7 @@ from plant.storage.db import Database, open_db
 from plant.ai.vision import VisionClient
 from plant.ai.reasoning import ReasoningClient
 from plant.core.safety import apply_safety
+from plant.core import schedule as sched
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +42,6 @@ class ControlLoop:
     def __init__(self, cfg: dict, hardware: Hardware) -> None:
         self.cfg = cfg
         self.hardware = hardware
-        self._interval = cfg.get("loop_interval_minutes", 60) * 60
         self._db: Database = open_db(cfg)
         self._vision = VisionClient(cfg)
         self._reasoning = ReasoningClient(cfg)
@@ -40,11 +49,13 @@ class ControlLoop:
             "stage": "idle",
             "stage_started_at": None,
             "cycle_started_at": None,
-            # First-cycle estimate; the loop refines this after each cycle completes.
-            "next_cycle_at": (
-                datetime.now(timezone.utc) + timedelta(seconds=self._interval)
-            ).isoformat(),
+            "next_cycle_at": sched.next_check(cfg).astimezone(timezone.utc).isoformat(),
         }
+        # The plan between checks, kept next to the database so a restart
+        # carries on with it instead of forcing a new check.
+        self._plan_path = Path(cfg["storage"]["db_path"]).with_name("schedule.json")
+        self.plan: dict | None = self._load_plan()
+        self._last_reading_at: datetime | None = None
         self._cycle_lock = threading.Lock()
         # Track the light state the model last prescribed so that the capture
         # flash always restores to the model's intent, not to whatever the
@@ -64,20 +75,53 @@ class ControlLoop:
     # ── Public API ────────────────────────────────────────────────────────────
 
     async def run_forever(self) -> None:
-        """Run the pipeline immediately, then repeat every loop_interval."""
-        log.info(
-            "ControlLoop: starting — interval=%ds, mode=%s",
-            self._interval, self.cfg.get("mode"),
-        )
+        """Run checks at the scheduled times and the plan in between.
+
+        On start-up a check only runs if the most recent scheduled one was
+        missed (e.g. the Pi was off at 08:00) — restarting the service no
+        longer forces a check.
+        """
+        sc = sched.schedule_cfg(self.cfg)
+        log.info("ControlLoop: starting — %d checks/day from %s, mode=%s",
+                 sc["checks_per_day"], sc["first_check"], self.cfg.get("mode"))
+        loop = asyncio.get_event_loop()
+        if self._missed_check():
+            log.info("ControlLoop: the last scheduled check was missed — checking now")
+            await self._run_check(loop)
+        elif self.plan is None:
+            self.replan(source="startup")
         while True:
-            try:
-                await asyncio.get_event_loop().run_in_executor(None, self._run_cycle)
-            except Exception:
-                log.exception("ControlLoop: unhandled error in cycle — will retry next interval")
-            self.cycle_state["next_cycle_at"] = (
-                datetime.now(timezone.utc) + timedelta(seconds=self._interval)
-            ).isoformat()
-            await asyncio.sleep(self._interval)
+            nxt = sched.next_check(self.cfg)
+            self.cycle_state["next_cycle_at"] = nxt.astimezone(timezone.utc).isoformat()
+            # Short naps so a change of check times in Settings takes effect,
+            # and so the plan runner gets its turn.
+            while datetime.now(timezone.utc) < nxt:
+                try:
+                    await loop.run_in_executor(None, self.run_plan_step)
+                except Exception:
+                    log.exception("Plan runner: error")
+                await asyncio.sleep(20)
+                new = sched.next_check(self.cfg)
+                if new != nxt:
+                    nxt = new
+                    self.cycle_state["next_cycle_at"] = nxt.astimezone(timezone.utc).isoformat()
+            await self._run_check(loop)
+
+    async def _run_check(self, loop) -> None:
+        try:
+            await loop.run_in_executor(None, self._run_cycle)
+        except Exception:
+            log.exception("ControlLoop: unhandled error in check — will retry at the next one")
+
+    def _missed_check(self) -> bool:
+        latest = self._db.latest_cycle()
+        if latest is None:
+            return True
+        try:
+            last = datetime.fromisoformat(latest.ts)
+        except ValueError:
+            return True
+        return last < sched.previous_check(self.cfg)
 
     def run_cycle(self) -> int | None:
         """Run one cycle synchronously and return the DB cycle id.
@@ -180,6 +224,7 @@ class ControlLoop:
             recent_cycles=list(recent),
             thermal=thermal,
             air_c=None if temp_missing else temp.celsius,
+            schedule_note=self._schedule_note(),
         )
         reasoning_ms = int((_time.monotonic() - _t0) * 1000)
         log.info("Reason: %s [%.1fs]",
@@ -192,7 +237,22 @@ class ControlLoop:
             proposed=decision,
             soil=soil,
             recent_cycles=list(recent),
+            last_water_ts=self._last_event_water(),
         )
+
+        # The light follows the daily light window (Settings → Schedule);
+        # a cold reading still forces it on for warmth.
+        too_cold = float(self.cfg.get("temperature", {}).get("too_cold_celsius", 15.0))
+        in_window = sched.light_planned_on(self.cfg, datetime.now(timezone.utc))
+        cold = (not temp_missing) and temp.celsius < too_cold
+        want_light = in_window or cold
+        if want_light != safe_decision.light_on:
+            why = ("inside the light window" if in_window else
+                   "cold — on for warmth" if cold else "outside the light window")
+            safe_decision = safe_decision.model_copy(update={
+                "light_on": want_light,
+                "reasoning": safe_decision.reasoning + f"\n[Schedule] light {'on' if want_light else 'off'} — {why}",
+            })
 
         # 6. Act
         self._set_stage("acting")
@@ -237,7 +297,209 @@ class ControlLoop:
             "── Cycle complete (id=%d): water=%s, light=%s ─────────────────",
             cycle_id, safe_decision.water, safe_decision.light_on,
         )
+
+        # 8. Plan until the next check
+        try:
+            self.replan(
+                source="check",
+                soil_pct=soil.moisture_pct if soil is not None else None,
+                light_now=safe_decision.light_on,
+                watered_now_secs=safe_decision.water_seconds if safe_decision.water else 0.0,
+                ai_reasoning=decision.reasoning,
+            )
+        except Exception:
+            log.exception("Plan: could not build the schedule")
         return cycle_id
+
+    # ── Plan between checks ─────────────────────────────────────────────────
+
+    def _thresholds_pct(self) -> tuple[float, float]:
+        soil_cfg = self.cfg.get("soil", {})
+        cal_dry = int(soil_cfg.get("cal_dry", 1023))
+        cal_wet = int(soil_cfg.get("cal_wet", 0))
+        span = (cal_dry - cal_wet) or 1
+        pct = lambda adc: max(0.0, min(100.0, (cal_dry - adc) / span * 100))
+        return pct(soil_cfg.get("dry_threshold", 700)), pct(soil_cfg.get("wet_threshold", 400))
+
+    def _last_event_water(self) -> datetime | None:
+        ts = self._db.last_water_event_ts()
+        try:
+            return datetime.fromisoformat(ts) if ts else None
+        except ValueError:
+            return None
+
+    def _rate_points(self) -> list[dict]:
+        """Moisture readings from checks and between checks, oldest first."""
+        since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        pts: list[dict] = []
+        for c in self._db.recent_cycles(limit=400):
+            if c.ts < since:
+                break
+            try:
+                ts = datetime.fromisoformat(c.ts)
+            except ValueError:
+                continue
+            pts.append({"ts": ts, "soil_pct": c.soil_pct, "light_on": bool(c.final_light_on),
+                        "water_secs": float(c.final_water_secs or 0) if c.final_water else 0.0})
+        light = None
+        for e in self._db.events_since(since):
+            ts = datetime.fromisoformat(e["ts"])
+            if e["kind"] in ("light_on", "light_off"):
+                light = e["kind"] == "light_on"
+            if e["kind"] == "water" and pts:
+                # attach to the reading just before it
+                prev = max((p for p in pts if p["ts"] <= ts), key=lambda p: p["ts"], default=None)
+                if prev is not None:
+                    prev["water_secs"] = prev.get("water_secs", 0) + float(e["seconds"] or 0)
+            elif e["kind"] == "reading":
+                pts.append({"ts": ts, "soil_pct": e["soil_pct"],
+                            "light_on": e["light_on"] if e["light_on"] is not None else bool(light),
+                            "water_secs": 0.0})
+        pts.sort(key=lambda p: p["ts"])
+        return pts
+
+    def replan(self, *, source: str = "replan", soil_pct: float | None = None,
+               light_now: bool | None = None, watered_now_secs: float = 0.0,
+               ai_reasoning: str = "") -> dict:
+        """Build (and save) the plan from now until the next check."""
+        if soil_pct is None and source != "check":
+            try:
+                r = self.hardware.soil.read()
+                soil_pct = r.moisture_pct if r is not None else None
+            except Exception:
+                soil_pct = None
+        if light_now is None:
+            light_now = self._model_light_on
+        dry_pct, wet_pct = self._thresholds_pct()
+        if not ai_reasoning and self.plan and source != "check":
+            # keep the last check's explanation when only the timing changed
+            ai_reasoning = self.plan.get("ai_reasoning", "")
+        plan = sched.build_plan(
+            self.cfg, now=datetime.now(timezone.utc), soil_pct=soil_pct,
+            dry_pct=dry_pct, wet_pct=wet_pct, rates=sched.learn_rates(self._rate_points()),
+            light_now=light_now, watered_now_secs=watered_now_secs,
+            last_water_at=self._last_event_water(), ai_reasoning=ai_reasoning, source=source,
+        )
+        plan["ai_reasoning"] = ai_reasoning
+        self.plan = plan
+        self._save_plan()
+        log.info("Plan (%s): %d actions until %s", source,
+                 sum(1 for a in plan["actions"] if a["kind"] != "check"), plan["next_check_at"])
+        return plan
+
+    def run_plan_step(self) -> None:
+        """Carry out due actions, and take the half-hourly reading (+ backup)."""
+        if not self._cycle_lock.acquire(blocking=False):
+            return                      # a check is running — it owns the hardware
+        try:
+            now = datetime.now(timezone.utc)
+            plan = self.plan
+            if plan:
+                done = set(plan.setdefault("done", []))
+                for i, a in enumerate(plan.get("actions", [])):
+                    if a["kind"] == "check" or i in done:
+                        continue
+                    at = datetime.fromisoformat(a["at"])
+                    if at > now:
+                        continue
+                    late = (now - at).total_seconds() / 60
+                    self._do_action(a, late_minutes=late)
+                    done.add(i)
+                    plan["done"] = sorted(done)
+                    self._save_plan()
+            if (self._last_reading_at is None
+                    or now - self._last_reading_at >= timedelta(minutes=sched.READING_MINUTES)):
+                self._last_reading_at = now
+                self._reading_and_backup()
+        finally:
+            self._cycle_lock.release()
+
+    def _do_action(self, a: dict, late_minutes: float) -> None:
+        kind = a["kind"]
+        if kind in ("light_on", "light_off"):
+            on = kind == "light_on"
+            self.hardware.light.set(on)
+            self.hardware.valve.off()        # relay-coil inrush guard, as in the check
+            self._model_light_on = on
+            self._db.insert_event(kind, light_on=on, source="plan", note=a.get("note"))
+            log.info("Plan: light %s", "on" if on else "off")
+        elif kind == "water":
+            if late_minutes > 30:
+                self._db.insert_event("skipped", seconds=a.get("seconds"), source="plan",
+                                      note=f"watering skipped — {late_minutes:.0f} min late (backup covers it)")
+                return
+            self._water(float(a.get("seconds") or 0), source="plan", note=a.get("note"))
+
+    def _water(self, seconds: float, *, source: str, note: str | None) -> bool:
+        from plant.ai.schema import Decision
+        soil = self.hardware.soil.read()
+        proposed = Decision(water=True, water_seconds=min(seconds, 60.0), light_on=self._model_light_on,
+                            reasoning=f"{source} watering between checks")
+        safe = apply_safety(cfg=self.cfg, proposed=proposed, soil=soil,
+                            recent_cycles=list(self._db.recent_cycles(limit=8)),
+                            last_water_ts=self._last_event_water())
+        if not safe.water:
+            why = safe.reasoning.split("[Safety]")[-1].strip()
+            self._db.insert_event("skipped", seconds=seconds,
+                                  soil_pct=soil.moisture_pct if soil else None,
+                                  source=source, note=f"watering skipped — {why}")
+            log.info("Plan: %s watering skipped — %s", source, why)
+            return False
+        log.info("Plan: %s watering %.1fs", source, safe.water_seconds)
+        self.hardware.valve.pulse(safe.water_seconds)
+        self.hardware.valve.off()
+        self._db.insert_event("water", seconds=safe.water_seconds,
+                              soil_pct=soil.moisture_pct if soil else None,
+                              soil_raw=soil.raw if soil else None, source=source, note=note)
+        return True
+
+    def _reading_and_backup(self) -> None:
+        soil = self.hardware.soil.read()
+        try:
+            temp = self.hardware.temperature.read()
+        except Exception:
+            temp = None
+        self._db.insert_event(
+            "reading", soil_pct=soil.moisture_pct if soil else None,
+            soil_raw=soil.raw if soil else None,
+            temp_celsius=temp.celsius if temp is not None else None,
+            light_on=self.hardware.light.is_on(), source="backup")
+        if soil is None:
+            return
+        dry_adc = self.cfg.get("soil", {}).get("dry_threshold", 700)
+        if soil.raw > dry_adc:
+            max_pulse = float(self.cfg.get("watering", {}).get("max_pulse_seconds", 8))
+            log.info("Backup: soil %.0f%% is below the dry line — watering", soil.moisture_pct)
+            self._water(max_pulse, source="backup",
+                        note=f"soil {soil.moisture_pct:.0f}% dropped below the dry line before the plan expected")
+
+    def _schedule_note(self) -> str:
+        sc = sched.schedule_cfg(self.cfg)
+        nxt = sched.next_check(self.cfg)
+        hrs = (nxt - datetime.now(timezone.utc)).total_seconds() / 3600
+        return (f"This is one of {sc['checks_per_day']} full checks a day. The next one is at "
+                f"{nxt.strftime('%H:%M')} (in about {hrs:.0f} h). Between checks a planner times the "
+                f"light ({sc['light_on_at']} for {sc['light_hours']:g} h) and waters when the forecast reaches "
+                "the dry line, with a backup soil check every 30 min. Decide what to do NOW; "
+                "in your reasoning, mention anything the planner should know.")
+
+    def _load_plan(self) -> dict | None:
+        try:
+            plan = json.loads(self._plan_path.read_text())
+            # a plan whose next check has passed is stale
+            if datetime.fromisoformat(plan["next_check_at"]) < datetime.now(timezone.utc) - timedelta(hours=1):
+                return None
+            return plan
+        except Exception:
+            return None
+
+    def _save_plan(self) -> None:
+        try:
+            tmp = self._plan_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.plan))
+            tmp.replace(self._plan_path)
+        except Exception as exc:
+            log.warning("Plan: could not save — %s", exc)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -26,6 +26,7 @@ def apply_safety(
     proposed: Decision,
     soil: SoilReading | None,
     recent_cycles: list,   # Sequence[Cycle] — avoids circular import
+    last_water_ts: datetime | None = None,
 ) -> Decision:
     """Return a (possibly modified) Decision that passes all safety checks.
 
@@ -37,6 +38,8 @@ def apply_safety(
         proposed: Raw Decision from the AI or rule-based fallback.
         soil: Current soil reading (for sanity check).
         recent_cycles: Recent Cycle objects from the DB (newest first).
+        last_water_ts: Latest watering outside the cycles table (a planned or
+            backup watering between checks), counted for the min interval.
 
     Returns:
         A safety-clamped Decision ready to act on.
@@ -59,7 +62,8 @@ def apply_safety(
     # 2. Minimum interval between waterings
     if water:
         min_interval = timedelta(minutes=watering["min_interval_minutes"])
-        last_water_ts = _last_watering_ts(recent_cycles)
+        candidates = [t for t in (_last_watering_ts(recent_cycles), last_water_ts) if t is not None]
+        last_water_ts = max(candidates) if candidates else None
         if last_water_ts is not None:
             elapsed = datetime.now(timezone.utc) - last_water_ts
             if elapsed < min_interval:

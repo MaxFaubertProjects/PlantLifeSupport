@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -30,8 +31,9 @@ import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from plant.core import schedule as sched
 from plant.web.streams import LiveFeed, polling_source
 
 
@@ -93,8 +95,16 @@ class PhotoView(BaseModel):
     y: float = 50.0
 
 
+class ScheduleSettings(BaseModel):
+    checks_per_day: Optional[int] = Field(None, ge=1, le=24)
+    first_check: Optional[str] = Field(None, pattern=r"^\d{1,2}:\d{2}$")
+    light_on_at: Optional[str] = Field(None, pattern=r"^\d{1,2}:\d{2}$")
+    light_hours: Optional[float] = Field(None, ge=0, le=24)
+
+
 class ConfigUpdateRequest(BaseModel):
-    loop_interval_minutes: Optional[int] = None
+    loop_interval_minutes: Optional[int] = None   # legacy: mapped to checks_per_day
+    schedule: Optional[ScheduleSettings] = None
     plant: Optional[PlantConfigSection] = None
     soil: Optional[SoilRanges] = None
     temperature: Optional[TemperatureRanges] = None
@@ -498,7 +508,8 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             "cycle_state": cycle_state,
             "plant": plant,
             "thresholds": thresholds,
-            "loop_interval_minutes": cfg.get("loop_interval_minutes", 60),
+            "loop_interval_minutes": sched.check_interval_minutes(cfg),
+            "checks_per_day": sched.schedule_cfg(cfg)["checks_per_day"],
             "sensors": sensors,
             "live": _live_info(),
             "photo_view": _photo_view(cfg),
@@ -512,6 +523,23 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         limit = max(1, min(limit, 200))
         db = control_loop.db
         return [_cycle_to_dict(c) for c in db.recent_cycles(limit=limit)]
+
+    # ── API: schedule between checks ──────────────────────────────────────────
+
+    @app.get("/api/schedule")
+    async def api_schedule() -> dict[str, Any]:
+        """The plan from the last check until the next: actions + forecast."""
+        plan = getattr(control_loop, "plan", None)
+        if not plan:
+            raise HTTPException(status_code=404, detail="No schedule yet — it is made at the next check")
+        return {k: v for k, v in plan.items() if k != "ai_reasoning"}
+
+    @app.get("/api/events")
+    async def api_events(hours: float = 72) -> list[dict[str, Any]]:
+        """Waterings, light switches and soil readings between checks, oldest first."""
+        hours = max(1.0, min(hours, 24 * 14))
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        return control_loop.db.events_since(since)
 
     # ── API: timelapse frames ─────────────────────────────────────────────────
 
@@ -628,7 +656,8 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         water = cfg.get("watering", {})
         light = cfg.get("light", {})
         return {
-            "loop_interval_minutes": cfg.get("loop_interval_minutes", 60),
+            "loop_interval_minutes": sched.check_interval_minutes(cfg),
+            "schedule": sched.schedule_cfg(cfg),
             "plant": {
                 "name": plant.get("name", ""),
                 "species": plant.get("species", ""),
@@ -667,10 +696,17 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     @app.post("/api/config")
     async def post_config(req: ConfigUpdateRequest, _=Depends(require_control)) -> dict[str, Any]:
         """Update editable config values in memory and write back to disk."""
-        if req.loop_interval_minutes is not None:
-            cfg["loop_interval_minutes"] = req.loop_interval_minutes
-            control_loop._interval = req.loop_interval_minutes * 60
-            log.info("Config: loop_interval_minutes → %d", req.loop_interval_minutes)
+        replan = False
+        if req.loop_interval_minutes is not None and req.schedule is None:
+            n = max(1, min(24, round(24 * 60 / max(1, req.loop_interval_minutes))))
+            cfg.setdefault("schedule", {})["checks_per_day"] = n
+            replan = True
+        if req.schedule is not None:
+            sc = cfg.setdefault("schedule", {})
+            for k, v in req.schedule.model_dump(exclude_none=True).items():
+                sc[k] = v
+            log.info("Config: schedule → %s", sched.schedule_cfg(cfg))
+            replan = True
 
         if req.plant is not None:
             plant = cfg.setdefault("plant", {})
@@ -713,6 +749,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             if req.light.max_on_hours_per_day is not None:
                 l["max_on_hours_per_day"] = req.light.max_on_hours_per_day
             log.info("Config: light limits updated")
+            replan = True
 
         if req.ai is not None:
             ai = cfg.setdefault("ai", {})
@@ -735,6 +772,15 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             with open(config_path, "w") as f:
                 yaml.dump(to_write, f, default_flow_style=False, allow_unicode=True,
                           sort_keys=False)
+
+        if replan or req.soil is not None or req.watering is not None:
+            # New check times / light window / limits → redo the plan until the
+            # next check (no models, just the planner).
+            control_loop.cycle_state["next_cycle_at"] = (
+                sched.next_check(cfg).astimezone(timezone.utc).isoformat())
+            if control_loop.cycle_state.get("stage") == "idle":
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: control_loop.replan(source="settings"))
 
         return {"ok": True}
 

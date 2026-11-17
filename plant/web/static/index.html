@@ -710,7 +710,7 @@
       </button>
       <button class="softbtn cycle" id="cycle-btn" onclick="triggerCycle()">
         <span class="softbtn-badge"><svg class="ic"><use href="#i-cycle"/></svg></span>
-        <span class="softbtn-label">Run cycle now</span>
+        <span class="softbtn-label">Check now</span>
       </button>
       <button class="softbtn light" id="light-btn" onclick="toggleLight()">
         <span class="softbtn-badge"><svg class="ic"><use href="#i-sun"/></svg></span>
@@ -745,13 +745,41 @@
       <div id="tab-schedule" class="cfg-tab-content active">
         <div class="cfg-section">
           <h2 class="cfg-h">Schedule</h2>
-          <p class="cfg-lede">How often the full sense → capture → describe → reason → act pipeline runs.</p>
+          <p class="cfg-lede">A full check (photo, vision model, reasoning model) runs at these times and plans the light and watering until the next one. In between, the soil is read every 30 min and watered if it gets too dry.</p>
           <div class="cfg-group">
-            <div class="cfg-field">
-              <label class="cfg-label" for="cfg-interval">Cycle interval (minutes)</label>
-              <input id="cfg-interval" class="cfg-input num" type="number" min="1" max="1440">
-              <p class="cfg-hint">Every hour (60) is the default. Shorter intervals mean more photos and more AI calls.</p>
+            <div class="cfg-row">
+              <div class="cfg-field">
+                <label class="cfg-label" for="cfg-checks">Checks per day</label>
+                <select id="cfg-checks" class="cfg-input" oninput="previewChecks()">
+                  <option value="1">1 — once a day</option>
+                  <option value="2">2 — every 12 h</option>
+                  <option value="3">3 — every 8 h</option>
+                  <option value="4">4 — every 6 h</option>
+                  <option value="6">6 — every 4 h</option>
+                  <option value="8">8 — every 3 h</option>
+                  <option value="12">12 — every 2 h</option>
+                  <option value="24">24 — every hour</option>
+                </select>
+              </div>
+              <div class="cfg-field">
+                <label class="cfg-label" for="cfg-first-check">First check at</label>
+                <input id="cfg-first-check" class="cfg-input" type="time" step="300" oninput="previewChecks()">
+              </div>
             </div>
+            <p class="cfg-hint" id="cfg-checks-preview"></p>
+          </div>
+          <div class="cfg-group">
+            <div class="cfg-row">
+              <div class="cfg-field">
+                <label class="cfg-label" for="cfg-light-on">Light on at</label>
+                <input id="cfg-light-on" class="cfg-input" type="time" step="300" oninput="previewChecks()">
+              </div>
+              <div class="cfg-field">
+                <label class="cfg-label" for="cfg-light-hours">Light hours per day</label>
+                <input id="cfg-light-hours" class="cfg-input num" type="number" min="0" max="24" step="0.5" oninput="previewChecks()">
+              </div>
+            </div>
+            <p class="cfg-hint" id="cfg-light-preview"></p>
           </div>
           <div class="cfg-actions"><button class="cfg-save" onclick="saveSchedule()">Save schedule</button></div>
         </div>
@@ -1014,6 +1042,7 @@ function stripPrefix(s) { return (s || '').replace(/^\[Ollama unavailable[^\]]+\
 function escHtml(s) { return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function everyText(min) {
   if (min === 60) return 'every hour';
+  if (min === 1440) return 'once a day';
   if (min % 60 === 0) return `every ${min / 60} hours`;
   return `every ${min} min`;
 }
@@ -1286,7 +1315,7 @@ function render(status, cycles) {
   const cycleBtn = $('cycle-btn');
   cycleBtn.disabled = active;
   cycleBtn.classList.toggle('running', active);
-  cycleBtn.querySelector('.softbtn-label').textContent = active ? 'Cycle running…' : 'Run cycle now';
+  cycleBtn.querySelector('.softbtn-label').textContent = active ? 'Checking…' : 'Check now';
 
   updateLoadingBar(stage);
   if (status.photo_view && JSON.stringify(status.photo_view) !== JSON.stringify(photoView)) {
@@ -1317,7 +1346,9 @@ function renderPipeline(cycleState) {
   let intro;
   if (idle) {
     const eta = computeEta();
-    intro = eta != null ? `Resting · next check in ${Math.floor(eta / 60)}:${pad2(eta % 60)}` : 'Resting';
+    const etaTxt = eta == null ? '' : eta >= 3600 ? `${Math.floor(eta / 3600)} h ${pad2(Math.floor(eta % 3600 / 60))} min`
+      : `${Math.floor(eta / 60)}:${pad2(eta % 60)}`;
+    intro = eta != null ? `Resting · next check ${eta >= 3600 ? 'at ' + hm(Date.now() + eta * 1000) + ' (in ' + etaTxt + ')' : 'in ' + etaTxt}` : 'Resting';
   } else {
     const cs = cycleState.cycle_started_at;
     const el = cs ? Math.max(0, Math.round((Date.now() - new Date(cs).getTime()) / 1000)) : 0;
@@ -1363,7 +1394,7 @@ async function refreshSchedule() {
     schedule = await api('GET', '/api/schedule');
   } catch (e) {
     schedule = null;
-    scheduleRetryAt = Date.now() + (e.status === 404 ? 10 * 60e3 : 60e3);
+    scheduleRetryAt = Date.now() + (e.status === 404 ? 2 * 60e3 : 60e3);
   }
 }
 
@@ -1398,6 +1429,28 @@ function learnRates(cycles) {
   };
 }
 
+// Between the (few) daily checks the Pi logs soil readings every 30 min,
+// planned/backup waterings and light switches (/api/events). Fold them into
+// the cycle list (same shape, newest first) so the chart line stays dense and
+// the light strip knows when the light actually changed.
+function withEvents(cycles, events) {
+  if (!events || !events.length) return cycles;
+  const extra = [];
+  let light = null;
+  events.forEach(e => {
+    if (e.kind === 'light_on' || e.kind === 'light_off') light = e.kind === 'light_on';
+    if (e.kind === 'reading') {
+      if (e.light_on != null) light = e.light_on;
+      extra.push({ ts: e.ts, soil_pct: e.soil_pct, final_light_on: light, final_water: false, _event: true });
+    } else if (e.kind === 'water') {
+      extra.push({ ts: e.ts, soil_pct: e.soil_pct, final_light_on: light, final_water: true, final_water_secs: e.seconds, _event: true });
+    } else if (e.kind === 'light_on' || e.kind === 'light_off') {
+      extra.push({ ts: e.ts, soil_pct: null, final_light_on: light, final_water: false, _event: true });
+    }
+  });
+  return [...cycles, ...extra].sort((a, b) => new Date(b.ts) - new Date(a.ts));
+}
+
 function buildProjection(now, startPct, rates, th) {
   const pts = [], rate = rates.rate;
   if (startPct == null || rate == null) return { pts, cross: null };
@@ -1422,8 +1475,9 @@ function renderForecast() {
   const live = window.__liveSoil;
   const latest = status.latest;
   const nowPct = (live && live.pct != null) ? live.pct : (latest ? latest.soil_pct : null);
-  const past = cycles.filter(c => c.soil_pct != null && now - new Date(c.ts) <= 24 * HOUR).slice().reverse();
-  const rates = learnRates(cycles);
+  const hist = withEvents(cycles, window.__events);
+  const past = hist.filter(c => c.soil_pct != null && now - new Date(c.ts) <= 24 * HOUR).slice().reverse();
+  const rates = learnRates(hist);
 
   let future = [], plannedWater = [], cross = null, lightPlan = [];
   const usingPlan = !!(schedule && Array.isArray(schedule.forecast) && schedule.forecast.length);
@@ -1441,7 +1495,7 @@ function renderForecast() {
   }
 
   drawForecast($('sc-chart'), { now, past, future, th, plannedWater, cross, usingPlan, nowPct });
-  renderLightStrip(now, cycles, lightPlan, status.light_on);
+  renderLightStrip(now, hist, lightPlan, status.light_on, usingPlan && schedule.next_check_at ? new Date(schedule.next_check_at).getTime() : null);
   $('lg-pred').textContent = usingPlan ? 'Planned' : 'Projected';
 
   const axis = [-24, -12, 0, 12, 24].map(h => {
@@ -1542,7 +1596,7 @@ function nowPctDot(past, future) {
 }
 
 // 48 one-hour cells: 24 h back (what the light did) + 24 h ahead (planned).
-function renderLightStrip(now, cycles, lightPlan, lightNow) {
+function renderLightStrip(now, cycles, lightPlan, lightNow, planEnd) {
   const N = 48, cells = new Array(N).fill('');
   const t0 = now - 24 * HOUR;
   const chrono = cycles.slice().reverse().filter(c => new Date(c.ts) >= t0 - 2 * HOUR);
@@ -1560,6 +1614,7 @@ function renderLightStrip(now, cycles, lightPlan, lightNow) {
     const evs = lightPlan.slice().sort((a, b) => a.t - b.t);
     for (let k = 24; k < N; k++) {
       const mid = t0 + (k + 0.5) * HOUR;
+      if (planEnd && t0 + k * HOUR >= planEnd) break;   // the plan stops at the next check
       on = !!lightNow;
       evs.forEach(ev => { if (ev.t <= mid) on = ev.on; });
       if (on) cells[k] = 'plan';
@@ -1576,7 +1631,7 @@ function renderOutlook({ now, rates, cross, nowPct, th, status, cycles, usingPla
     $('plan-title').textContent = 'Plan';
     $('plan-sub').textContent = schedule.generated_at ? `updated ${hm(schedule.generated_at)}` : '';
     const kinds = { water: ['Water', T.blue], light_on: ['Light on', T.amber], light_off: ['Light off', '#c9cec8'], check: ['Check', T.faint] };
-    (schedule.actions || []).filter(a => new Date(a.at).getTime() <= now + 24 * HOUR)
+    (schedule.actions || []).filter(a => { const t = new Date(a.at).getTime(); return t >= now - 10 * 60e3 && t <= now + 24 * HOUR; })
       .sort((a, b) => new Date(a.at) - new Date(b.at)).forEach(a => {
         const [what, dot] = kinds[a.kind] || [a.kind, T.faint];
         rows.push({ t: hm(a.at), dot, what: what + (a.kind === 'water' && a.seconds ? ` ${a.seconds} s` : ''), note: a.note || '' });
@@ -1590,7 +1645,7 @@ function renderOutlook({ now, rates, cross, nowPct, th, status, cycles, usingPla
     $('plan-sub').textContent = '';
     const eta = computeEta();
     const stage = status.cycle_state.stage;
-    if (stage && stage !== 'idle') rows.push({ t: 'Now', dot: T.accent, what: 'Cycle running', note: `· ${stage}` });
+    if (stage && stage !== 'idle') rows.push({ t: 'Now', dot: T.accent, what: 'Check running', note: `· ${stage}` });
     else if (eta != null) rows.push({ t: hm(now + eta * 1000), dot: T.accent, what: 'Next check', note: `· then ${everyText(intervalMin)}` });
     const lastWater = cycles.find(c => c.final_water && c.final_water_secs > 0);
     if (lastWater) {
@@ -1620,11 +1675,11 @@ function renderDecision({ now, cross, nowPct, th, status, usingPlan }) {
   if (stage && stage !== 'idle') { el.textContent = `Checking now · ${stage}…`; return; }
   const eta = computeEta();
   if (eta == null) { el.textContent = ''; return; }
-  const next = now + eta * 1000;
+  const next = Math.ceil((now + eta * 1000) / 60e3) * 60e3;   // eta is floored to the second
   const horizon = next + intervalMin * 60e3;           // what this check could act on
   let likely;
   if (usingPlan) {
-    const w = (schedule.actions || []).find(a => a.kind === 'water' && new Date(a.at).getTime() <= horizon);
+    const w = (schedule.actions || []).find(a => a.kind === 'water' && new Date(a.at).getTime() > now - 60e3 && new Date(a.at).getTime() <= horizon);
     likely = w ? `water planned ${hm(w.at)}` : 'no water planned';
   } else if (nowPct == null || th.dry_pct == null) {
     likely = '';
@@ -1702,11 +1757,13 @@ function renderReasoning(cycles) {
 async function refresh() {
   let active = false;
   try {
-    const [status, cycles] = await Promise.all([
+    const [status, cycles, events] = await Promise.all([
       api('GET', '/api/status'),
       api('GET', '/api/cycles?limit=96'),
+      api('GET', '/api/events?hours=72').catch(() => []),
       refreshSchedule(),
     ]);
+    window.__events = events || [];
     window.__lastStatus = status;
     active = render(status, cycles);
   } catch (e) {
@@ -1854,7 +1911,15 @@ async function loadCfg() {
     const cfg = await api('GET', '/api/config');
     intervalMin = cfg.loop_interval_minutes || 60;
     minWaterGapMin = cfg.watering?.min_interval_minutes ?? 90;
-    $('cfg-interval').value      = cfg.loop_interval_minutes || 60;
+    const sc = cfg.schedule || {};
+    maxLightHours = sc.max_light_hours ?? cfg.light?.max_on_hours_per_day ?? 16;
+    const sel = $('cfg-checks'), n = String(sc.checks_per_day || 2);
+    if (![...sel.options].some(o => o.value === n)) sel.add(new Option(`${n} a day`, n));
+    sel.value = n;
+    $('cfg-first-check').value   = sc.first_check || '08:00';
+    $('cfg-light-on').value      = sc.light_on_at || '07:00';
+    $('cfg-light-hours').value   = sc.light_hours ?? maxLightHours;
+    previewChecks();
     $('cfg-plant-name').value    = cfg.plant.name || '';
     $('cfg-plant-species').value = cfg.plant.species || '';
     $('cfg-plant-notes').value   = cfg.plant.species_notes || '';
@@ -1890,13 +1955,31 @@ async function saveRanges() {
   } catch (e) { toast('Error: ' + e.message); }
 }
 
+let maxLightHours = 16;
+function _hm(str) { const [h, m] = (str || '0:0').split(':').map(Number); return h * 60 + (m || 0); }
+function _fmt(min) { min = ((min % 1440) + 1440) % 1440; return `${pad2(Math.floor(min / 60))}:${pad2(Math.round(min % 60))}`; }
+function previewChecks() {
+  const n = parseInt($('cfg-checks').value, 10) || 2, first = _hm($('cfg-first-check').value || '08:00');
+  const times = Array.from({ length: n }, (_, k) => first + k * 1440 / n).sort((a, b) => (a % 1440) - (b % 1440));
+  $('cfg-checks-preview').textContent = n > 8
+    ? `Every ${24 / n} h starting ${_fmt(first)} — ${n} model runs a day.`
+    : `Checks at ${times.map(_fmt).join(', ')} — ${n} model run${n > 1 ? 's' : ''} a day.`;
+  const on = _hm($('cfg-light-on').value || '07:00'), hrs = parseFloat($('cfg-light-hours').value);
+  $('cfg-light-preview').textContent = isNaN(hrs) ? '' : hrs <= 0 ? 'The grow light stays off (it still turns on if it gets too cold).'
+    : `Light on ${_fmt(on)}–${_fmt(on + hrs * 60)}${hrs > maxLightHours ? ` — capped at ${maxLightHours} h (Safety limits)` : ''}.`;
+}
+
 async function saveSchedule() {
-  const mins = parseInt($('cfg-interval').value, 10);
-  if (!mins || mins < 1) { toast('Enter a valid interval (minutes)'); return; }
+  const checks_per_day = parseInt($('cfg-checks').value, 10);
+  const first_check = $('cfg-first-check').value, light_on_at = $('cfg-light-on').value;
+  const light_hours = parseFloat($('cfg-light-hours').value);
+  if (!first_check || !light_on_at || isNaN(light_hours)) { toast('Fill in every schedule field'); return; }
   try {
-    await api('POST', '/api/config', { loop_interval_minutes: mins });
-    intervalMin = mins;
-    toast(`Schedule saved — ${everyText(mins)}`);
+    await api('POST', '/api/config', { schedule: { checks_per_day, first_check, light_on_at, light_hours: Math.min(light_hours, maxLightHours) } });
+    intervalMin = Math.round(1440 / checks_per_day);
+    scheduleRetryAt = 0;
+    toast(`Schedule saved — ${checks_per_day} check${checks_per_day > 1 ? 's' : ''} a day`);
+    refresh();
   } catch (e) { toast('Error: ' + e.message); }
 }
 
