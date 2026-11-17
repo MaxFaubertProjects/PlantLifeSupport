@@ -971,6 +971,7 @@ let intervalMin = 60;        // loop_interval_minutes, from /api/config
 let minWaterGapMin = 90;     // watering.min_interval_minutes, from /api/config
 const REFRESH_IDLE = 30000;
 const REFRESH_ACTIVE = 2000;
+const REFRESH_LIVE = 5000;
 const HOUR = 3600e3;
 const $ = id => document.getElementById(id);
 const icon = (name, cls = '') => `<svg class="ic ${cls}"><use href="#i-${name}"/></svg>`;
@@ -1197,8 +1198,11 @@ function render(status, cycles) {
   }
 
   if (!timelapse.playing) {
-    $('hero-time').textContent = latest ? `Live · ${hm(latest.ts)}` : 'Live';
-    $('hero-cid').textContent = latest ? `#${latest.id}` : '';
+    const lv = status.live;
+    $('hero-time').textContent = liveVideo.cam ? 'Live video'
+      : (lv && !lv.idle) ? 'Video paused · cycle running'
+      : latest ? `Live · ${hm(latest.ts)}` : 'Live';
+    $('hero-cid').textContent = !liveVideo.cam && latest ? `#${latest.id}` : '';
   }
 
   if (latest) {
@@ -1259,6 +1263,7 @@ function render(status, cycles) {
   cycleBtn.querySelector('.softbtn-label').textContent = active ? 'Cycle running…' : 'Run cycle now';
 
   updateLoadingBar(stage);
+  liveVideo.update();
   return active || pumpOn;
 }
 
@@ -1679,7 +1684,8 @@ async function refresh() {
     console.error('Refresh error', e);
   } finally {
     if (refreshTimer) clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(refresh, active ? REFRESH_ACTIVE : REFRESH_IDLE);
+    // While live video runs, check the loop often so it pauses promptly when a cycle starts.
+    refreshTimer = setTimeout(refresh, active ? REFRESH_ACTIVE : (liveVideo.cam || liveVideo.th) ? REFRESH_LIVE : REFRESH_IDLE);
   }
 }
 
@@ -2003,7 +2009,7 @@ function renderHistory() {
 // ─────────────────────────────────────────────────────────────────────────────
 const SNAPSHOT_REFRESH_MS = 5000;
 function refreshSnapshot() {
-  if (!timelapse.playing && !thermal.ir) {
+  if (!timelapse.playing && !thermal.ir && !liveVideo.cam) {
     const heroImg = $('hero-img');
     const probe = new Image();
     probe.onload = () => { if (!timelapse.playing) heroImg.src = probe.src; };
@@ -2070,6 +2076,7 @@ class TimelapsPlayer {
     if (!this.frames.length) return;
     if (thermal.ir) thermal.setMode(false);
     this.playing = true; this._setButton();
+    liveVideo.update();
     this._showFrame(this.idx);
     this.timer = setInterval(() => { this.idx = (this.idx + 1) % this.frames.length; this._showFrame(this.idx); }, 1500);
   }
@@ -2080,7 +2087,7 @@ class TimelapsPlayer {
     requestAnimationFrame(() => requestAnimationFrame(() => { imgB.style.transition = ''; }));
     const imgA = $('hero-img');
     imgA.style.opacity = '0';
-    setTimeout(() => { imgA.src = `/api/snapshot.jpg?t=${Date.now()}`; imgA.style.opacity = '1'; }, 50);
+    setTimeout(() => { imgA.src = `/api/snapshot.jpg?t=${Date.now()}`; imgA.style.opacity = '1'; liveVideo.update(); }, 50);
     this._setButton();
     $('hero-time').textContent = 'Live'; $('hero-cid').textContent = '';
     if (window.__lastStatus) refresh();
@@ -2133,7 +2140,9 @@ const thermal = {
 
   async refreshNow() {
     clearTimeout(this._timer);
-    try { this.render(await api('GET', '/api/thermal')); } catch (_) { /* keep last frame */ }
+    if (!liveVideo.th) {
+      try { this.render(await api('GET', '/api/thermal')); } catch (_) { /* keep last frame */ }
+    }
     this._timer = setTimeout(() => this.refreshNow(), this.ir ? 3000 : THERMAL_REFRESH_MS);
   },
 
@@ -2282,8 +2291,77 @@ new ResizeObserver(() => thermal.placeMarker()).observe($('ir-frame'));
 
 // Keep the blurred backdrop on the same frame as the photo, whoever changes it
 // (live snapshot, timelapse).
-new MutationObserver(() => { $('hero-bg').src = $('hero-img').src; })
-  .observe($('hero-img'), { attributes: true, attributeFilter: ['src'] });
+new MutationObserver(() => {
+  const src = $('hero-img').src;
+  if (!src.includes('/api/stream.mjpg')) $('hero-bg').src = src;   // never open a 2nd video stream
+}).observe($('hero-img'), { attributes: true, attributeFilter: ['src'] });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live video. While the control loop is idle (and this tab is visible) the
+// photo becomes an MJPEG stream and the thermal view a server-sent-event
+// stream. The server ends both as soon as a cycle starts, so the AI models
+// get the cameras, RAM and CPU; the page then falls back to the 5 s stills.
+// ─────────────────────────────────────────────────────────────────────────────
+const liveVideo = {
+  cam: false,
+  th: null,                 // EventSource while thermal video runs
+  camRetryAt: 0, thRetryAt: 0,
+  _bgTimer: null,
+
+  allowed() {
+    const s = window.__lastStatus;
+    return !!(s && s.live && s.live.idle) && document.visibilityState === 'visible' && !timelapse.playing;
+  },
+
+  update() {
+    const s = window.__lastStatus, ok = this.allowed();
+    if (ok && s.live.camera && !this.cam && Date.now() >= this.camRetryAt) this.startCam();
+    else if (!ok && this.cam) this.stopCam();
+    if (ok && s.live.thermal && !this.th && Date.now() >= this.thRetryAt) this.startThermal();
+    else if (!ok && this.th) this.stopThermal();
+  },
+
+  startCam() {
+    const img = $('hero-img');
+    this.cam = true;
+    img.onerror = () => { this.stopCam(); this.camRetryAt = Date.now() + 30e3; };
+    img.src = `/api/stream.mjpg?t=${Date.now()}`;
+    $('hero-time').textContent = 'Live video'; $('hero-cid').textContent = '';
+    // Keep the blurred backdrop roughly in step with the video (cheap: tiny canvas every 10 s).
+    clearInterval(this._bgTimer);
+    this._bgTimer = setInterval(() => {
+      try {
+        const c = document.createElement('canvas'); c.width = 160; c.height = 90;
+        c.getContext('2d').drawImage(img, 0, 0, 160, 90);
+        $('hero-bg').src = c.toDataURL('image/jpeg', .7);
+      } catch (_) {}
+    }, 10e3);
+  },
+
+  stopCam() {
+    this.cam = false;
+    clearInterval(this._bgTimer);
+    const img = $('hero-img');
+    img.onerror = null;
+    img.src = `/api/snapshot.jpg?t=${Date.now()}`;   // also closes the MJPEG connection
+    if (!timelapse.playing) $('hero-time').textContent = 'Live';
+  },
+
+  startThermal() {
+    const es = new EventSource('/api/thermal/stream');
+    this.th = es;
+    es.onmessage = e => { try { thermal.render(JSON.parse(e.data)); } catch (_) {} };
+    es.addEventListener('end', () => { this.stopThermal(); setTimeout(refresh, 300); });
+    es.onerror = () => { this.stopThermal(); this.thRetryAt = Date.now() + 30e3; };
+  },
+
+  stopThermal() {
+    if (this.th) this.th.close();
+    this.th = null;
+    thermal.refreshNow();
+  },
+};
+document.addEventListener('visibilitychange', () => liveVideo.update());
 
 // ── Kiosk idle mode (big landscape screens only; phones and desktops scroll) ──
 const IDLE_MS = 3 * 60e3;

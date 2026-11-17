@@ -132,6 +132,17 @@ def encode_png(rgb) -> bytes:
             + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
+def _read_exact(stream, n: int) -> Optional[bytes]:
+    """Read exactly n bytes from a pipe, or None if it closes first."""
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = stream.read(n - len(buf))
+        if not chunk:
+            return None
+        buf.extend(chunk)
+    return bytes(buf)
+
+
 def rotate_cw(a, degrees: int):
     """Rotate a 2-D array clockwise by a multiple of 90 degrees."""
     return _np().rot90(a, k=-(int(degrees) // 90) % 4)
@@ -336,6 +347,55 @@ class ThermalCamera:
             air = self._safe_air()
             self._cache = self._process(raw, air, tel)
             return self._cache
+
+    def stream(self, keep_going, group: Optional[int] = None):
+        """Yield processed readings continuously until ``keep_going()`` is False.
+
+        Keeps one ``v4l2-ctl`` process streaming instead of starting one per
+        frame, averages ``group`` raw frames per reading (noise vs speed), and
+        holds the device lock throughout, so the control loop's read() waits
+        for at most one reading once the loop leaves "idle".
+        """
+        group = max(1, group or max(2, self._frames // 2))
+        with self._lock:
+            dev = self.device
+            if dev is None or not keep_going():
+                return
+            proc = subprocess.Popen(
+                ["v4l2-ctl", "-d", dev,
+                 "--set-fmt-video=width=100,height=126,pixelformat=YUYV",
+                 "--stream-mmap", "--stream-to=-"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
+            )
+            try:
+                np = _np()
+                air, air_at = None, 0.0
+                skipped = 0
+                batch = []
+                while keep_going():
+                    chunk = _read_exact(proc.stdout, FRAME_BYTES)
+                    if chunk is None:
+                        raise RuntimeError("thermal stream ended")
+                    if skipped < _WARMUP_FRAMES:
+                        skipped += 1
+                        continue
+                    batch.append(np.frombuffer(chunk, dtype="<u2").reshape(H_TOTAL, W))
+                    if len(batch) < group:
+                        continue
+                    frames = np.stack(batch)
+                    batch = []
+                    if time.time() - air_at > 30:      # 1-Wire reads are slow; refresh twice a minute
+                        air, air_at = self._safe_air(), time.time()
+                    tel = float(np.median(frames[:, _TEL_ROW, _TEL_COL]))
+                    reading = self._process(frames[:, :H_IMG, :].astype(float).mean(axis=0), air, tel)
+                    self._cache = reading
+                    yield reading
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
     # -- internals -----------------------------------------------------------
 

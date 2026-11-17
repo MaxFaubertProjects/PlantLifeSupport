@@ -6,6 +6,9 @@ GET  /                     → dashboard HTML
 GET  /photos/{filename}    → serve plant photos
 GET  /api/status           → latest cycle + current hardware state
 GET  /api/cycles           → recent cycles for charts + reasoning log
+GET  /api/stream.mjpg      → live camera video (MJPEG), only while the loop is idle
+GET  /api/thermal/stream   → live thermal frames (server-sent events), same rule
+GET  /api/live             → whether live video is possible right now
 POST /api/water            → trigger a manual watering pulse
 POST /api/light            → set light on/off
 """
@@ -16,6 +19,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import json
 import logging
 import os
 import time
@@ -24,9 +28,11 @@ from typing import Any, Optional
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+from plant.web.streams import LiveFeed, polling_source
 
 
 # Request models must live at module level so FastAPI can inspect them correctly
@@ -222,16 +228,104 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         path.resolve().relative_to(photo_dir.resolve())
         return FileResponse(str(path))
 
+    # ── Live video (only while the control loop is idle and someone watches) ──
+    #
+    # One shared producer per camera (see plant/web/streams.py). Streams end on
+    # their own as soon as a cycle starts, so the vision/reasoning models get
+    # the camera, RAM and CPU; the dashboard then falls back to stills. Both
+    # streams are read-only, like the rest of the public dashboard.
+
+    web_cfg = cfg.get("web", {}) or {}
+    stream_fps = float(web_cfg.get("stream_fps", 4))
+    thermal_fps = float(web_cfg.get("thermal_stream_fps", 4))
+
+    def loop_idle() -> bool:
+        return control_loop.cycle_state.get("stage") in (None, "idle")
+
+    _NO_CACHE = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                 "Pragma": "no-cache", "X-Accel-Buffering": "no"}
+
+    def _camera_source():
+        cam = hardware.camera
+        if hasattr(cam, "stream_jpegs"):
+            return lambda keep_going: cam.stream_jpegs(keep_going, fps=stream_fps)
+        if hasattr(cam, "snapshot"):
+            return polling_source(cam.snapshot, stream_fps)
+        return None
+
+    def _thermal_source():
+        cam = getattr(hardware, "thermal", None)
+        if cam is None:
+            return None
+        if hasattr(cam, "stream"):
+            return cam.stream
+        return polling_source(lambda: cam.read(max_age=0), thermal_fps)
+
+    _cam_src, _th_src = _camera_source(), _thermal_source()
+    camera_feed = LiveFeed("camera", _cam_src, loop_idle) if _cam_src else None
+    thermal_feed = LiveFeed("thermal", _th_src, loop_idle) if _th_src else None
+
+    def _live_info() -> dict[str, Any]:
+        th = getattr(hardware, "thermal", None)
+        return {
+            "idle": loop_idle(),
+            "camera": camera_feed is not None and getattr(hardware.camera, "available", True),
+            "thermal": thermal_feed is not None and bool(getattr(th, "available", False)),
+            "camera_viewers": camera_feed.viewers if camera_feed else 0,
+            "thermal_viewers": thermal_feed.viewers if thermal_feed else 0,
+        }
+
+    @app.get("/api/live")
+    async def api_live() -> dict[str, Any]:
+        return _live_info()
+
+    @app.get("/api/stream.mjpg")
+    async def api_stream(request: Request):
+        """MJPEG live view of the plant camera (multipart/x-mixed-replace)."""
+        if camera_feed is None:
+            raise HTTPException(status_code=501, detail="live video not supported")
+        if not loop_idle():
+            raise HTTPException(status_code=503, detail="a cycle is running — live video paused")
+
+        async def parts():
+            async for jpeg in camera_feed.frames(request.is_disconnected, max_fps=stream_fps * 2):
+                yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                       + str(len(jpeg)).encode() + b"\r\n\r\n" + jpeg + b"\r\n")
+
+        return StreamingResponse(parts(), media_type="multipart/x-mixed-replace; boundary=frame",
+                                 headers=_NO_CACHE)
+
+    @app.get("/api/thermal/stream")
+    async def api_thermal_stream(request: Request):
+        """Server-sent events: one /api/thermal-shaped JSON object per frame."""
+        cam = getattr(hardware, "thermal", None)
+        if thermal_feed is None or cam is None or not cam.available:
+            raise HTTPException(status_code=503, detail="thermal camera not connected")
+        if not loop_idle():
+            raise HTTPException(status_code=503, detail="a cycle is running — live video paused")
+
+        async def events():
+            yield "retry: 15000\n\n"
+            async for reading in thermal_feed.frames(request.is_disconnected, max_fps=thermal_fps * 2):
+                yield "data: " + json.dumps({"available": True, "live": True, **reading.to_api()}) + "\n\n"
+            yield "event: end\ndata: {}\n\n"
+
+        return StreamingResponse(events(), media_type="text/event-stream", headers=_NO_CACHE)
+
     # ── API: live snapshot ────────────────────────────────────────────────────
 
     @app.get("/api/snapshot.jpg")
     async def api_snapshot():
-        """Fresh camera JPEG for the dashboard's live-ish view.
+        """Fresh camera JPEG for the dashboard's still view.
 
         Lower resolution than the cycle's official capture, no grow-light
-        flash. Camera access is locked, so if a cycle is in its capture
-        step this will wait a few seconds.
+        flash. While the live feed is running its latest frame is returned
+        (the camera can't be opened twice). Camera access is locked, so if a
+        cycle is in its capture step this will wait a few seconds.
         """
+        live = camera_feed.fresh() if camera_feed else None
+        if live is not None:
+            return Response(content=live, media_type="image/jpeg", headers=_NO_CACHE)
         snap = getattr(hardware.camera, "snapshot", None)
         if snap is None:
             raise HTTPException(status_code=501, detail="snapshot not supported")
@@ -240,16 +334,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         except Exception as exc:
             log.warning("snapshot failed: %s", exc)
             raise HTTPException(status_code=500, detail=f"snapshot failed: {exc}")
-        return Response(
-            content=jpeg,
-            media_type="image/jpeg",
-            headers={
-                # Aggressively prevent caching so the dashboard always
-                # sees the latest frame.
-                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-                "Pragma": "no-cache",
-            },
-        )
+        return Response(content=jpeg, media_type="image/jpeg", headers=_NO_CACHE)
 
     # ── API: thermal camera ───────────────────────────────────────────────────
 
@@ -258,21 +343,32 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         """Latest thermal frame as a false-colour PNG (data URL) + stats in °C.
 
         Frames are cached for a few seconds inside the driver, so several
-        dashboards polling at once share one capture. Returns
-        ``available: false`` (HTTP 200) when the camera is unplugged so the
-        dashboard can show a calm "not connected" state instead of an error.
+        dashboards polling at once share one capture; while the live feed
+        runs its latest frame is returned. Returns ``available: false``
+        (HTTP 200) when the camera is unplugged so the dashboard can show a
+        calm "not connected" state instead of an error.
         """
         cam = getattr(hardware, "thermal", None)
         if cam is None:
             return {"available": False, "reason": "disabled"}
         if not cam.available:
             return {"available": False, "reason": "not connected"}
+        live = thermal_feed.fresh() if thermal_feed else None
+        if live is not None:
+            return {"available": True, **live.to_api()}
         try:
             reading = await asyncio.get_event_loop().run_in_executor(None, cam.read)
         except Exception as exc:
             log.warning("thermal read failed: %s", exc)
             return {"available": False, "reason": f"read failed: {exc}"}
         return {"available": True, **reading.to_api()}
+
+    def _without_thermal_feed(fn):
+        """Run fn with the live thermal feed stopped (it holds the device)."""
+        if thermal_feed is None:
+            return fn()
+        with thermal_feed.suspended():
+            return fn()
 
     @app.post("/api/thermal/calibrate")
     async def api_thermal_calibrate(_=Depends(require_control)) -> dict[str, Any]:
@@ -283,7 +379,8 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         if cam is None or not cam.available:
             raise HTTPException(status_code=503, detail="thermal camera not connected")
         try:
-            info = await asyncio.get_event_loop().run_in_executor(None, cam.calibrate)
+            info = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _without_thermal_feed(cam.calibrate))
         except Exception as exc:
             log.warning("thermal calibration failed: %s", exc)
             raise HTTPException(status_code=500, detail=f"calibration failed: {exc}")
@@ -295,7 +392,8 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         cam = getattr(hardware, "thermal", None)
         if cam is None or not hasattr(cam, "rotate"):
             raise HTTPException(status_code=503, detail="thermal camera not available")
-        info = await asyncio.get_event_loop().run_in_executor(None, cam.rotate)
+        info = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _without_thermal_feed(cam.rotate))
         return {"ok": True, **info}
 
     # ── API: status ───────────────────────────────────────────────────────────
@@ -362,6 +460,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             "plant": plant,
             "thresholds": thresholds,
             "sensors": sensors,
+            "live": _live_info(),
         }
 
     # ── API: cycles (for charts + reasoning log) ──────────────────────────────

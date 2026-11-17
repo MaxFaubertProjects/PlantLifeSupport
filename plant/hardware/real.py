@@ -281,6 +281,44 @@ class RealCamera:
         Image.fromarray(arr).save(buf, "JPEG", quality=65)
         return buf.getvalue()
 
+    # Live video for the dashboard. Small and slow on purpose: it only runs
+    # while the control loop is idle and someone is watching, but the Pi
+    # still has to stay cool and responsive.
+    _STREAM_SIZE = (640, 360)
+
+    def stream_jpegs(self, keep_going, fps: float = 4.0, quality: int = 60):
+        """Yield JPEG frames until ``keep_going()`` returns False.
+
+        Holds the camera lock for the whole stream, so a cycle's capture()
+        waits for at most one frame: the caller stops as soon as the loop
+        leaves "idle". The camera is closed again when the stream ends.
+        """
+        from PIL import Image
+        from io import BytesIO
+        period = 1.0 / max(0.5, fps)
+        with self._lock:
+            if not keep_going():
+                return
+            cam = Picamera2()
+            try:
+                config = cam.create_video_configuration(
+                    main={"size": self._STREAM_SIZE, "format": "RGB888"}, buffer_count=2)
+                cam.configure(config)
+                cam.start()
+                time.sleep(0.5)          # first frames are dark while exposure settles
+                while keep_going():
+                    t0 = time.time()
+                    arr = cam.capture_array("main")
+                    if arr.ndim == 3 and arr.shape[-1] >= 3:
+                        arr = arr[..., 2::-1]    # BGR → RGB (see _grab)
+                    buf = BytesIO()
+                    Image.fromarray(arr).save(buf, "JPEG", quality=quality)
+                    yield buf.getvalue()
+                    time.sleep(max(0.0, period - (time.time() - t0)))
+            finally:
+                cam.stop()
+                cam.close()
+
     def close(self) -> None:
         # Nothing persistent to release — the camera is closed after each capture.
         pass
