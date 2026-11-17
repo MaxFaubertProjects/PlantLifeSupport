@@ -93,7 +93,7 @@
     @media (min-width: 1000px) and (min-height: 660px) {
       body { overflow: hidden; }
       .app { height: 100vh; min-height: 0; display: grid; grid-template-columns: minmax(420px, .92fr) minmax(0, 1fr); gap: 16px; }
-      .stage { height: 100%; aspect-ratio: auto !important; }
+      .stage { height: 100%; aspect-ratio: auto !important; --photo-y: 22%; }
       .side { min-height: 0; }
       .chart-card { flex: 1 1 0; min-height: 200px; }
       .lower { flex: 0 0 auto; height: clamp(206px, 29vh, 320px); }
@@ -104,7 +104,11 @@
        Stage: photo / infrared with the status laid over it
        ══════════════════════════════════════════════════════════════════════ */
     .stage { position: relative; overflow: hidden; border-radius: var(--r-xl); background: #0b0d0c; aspect-ratio: 4 / 5; color: #fff; isolation: isolate; }
-    .stage > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: opacity .5s ease; }
+    /* The whole camera frame is shown (contain), sitting high so the status
+       text below doesn't cover it; a blurred copy of the same frame fills
+       the rest of the panel. */
+    .stage > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; object-position: 50% var(--photo-y, 30%); display: block; transition: opacity .5s ease; }
+    .stage > img.hero-bg { object-fit: cover; object-position: 50% 50%; filter: blur(28px) brightness(.5) saturate(1.2); transform: scale(1.15); transition: none; }
     .shade-top { position: absolute; inset: 0 0 auto 0; height: 26%; background: linear-gradient(rgba(8,10,9,.55), rgba(8,10,9,0)); pointer-events: none; }
     .shade-bottom { position: absolute; inset: auto 0 0 0; height: 66%; background: linear-gradient(rgba(8,10,9,0), rgba(8,10,9,.9)); pointer-events: none; }
 
@@ -344,7 +348,12 @@
     @media (max-width: 699px) {
       :root { --pad: 12px; }
       .nar-text { font-size: 40px; }
-      .status { left: 18px; right: 18px; bottom: 18px; }
+      /* Phones: the panel is too short to overlay text on the photo, so stack
+         them: full-width photo under the top pills, status below it. */
+      .stage { aspect-ratio: auto; padding: 112px 18px 18px; }
+      .stage > #hero-img, .stage > #hero-img-b { inset: 112px 0 auto 0; height: auto; aspect-ratio: 16 / 9; object-position: 50% 50%; }
+      .status { position: relative; left: auto; right: auto; bottom: auto; margin-top: calc((100vw - 24px) * 9 / 16 + 14px); }
+      .stage.ir-on { min-height: 640px; }
       .note-text { font-size: 14.5px; -webkit-line-clamp: 3; }
       .clock { font-size: 24px; }
       .tile { padding: 10px 12px; }
@@ -550,6 +559,7 @@
 <div class="app">
   <!-- ═══ Stage: live photo / infrared, with the status on top ═══════════ -->
   <section class="stage" id="stage">
+    <img id="hero-bg" class="hero-bg" alt="" aria-hidden="true">
     <img id="hero-img" alt="Live view of the plant">
     <img id="hero-img-b" alt="" aria-hidden="true" style="opacity:0">
     <div class="shade-top"></div>
@@ -2269,6 +2279,11 @@ const thermal = {
 };
 $('ir-frame').addEventListener('click', e => thermal.onTap(e));
 new ResizeObserver(() => thermal.placeMarker()).observe($('ir-frame'));
+
+// Keep the blurred backdrop on the same frame as the photo, whoever changes it
+// (live snapshot, timelapse).
+new MutationObserver(() => { $('hero-bg').src = $('hero-img').src; })
+  .observe($('hero-img'), { attributes: true, attributeFilter: ['src'] });
 
 // ── Kiosk idle mode (big landscape screens only; phones and desktops scroll) ──
 const IDLE_MS = 3 * 60e3;
