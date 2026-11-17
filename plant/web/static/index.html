@@ -5,10 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#eef0ec">
   <title>Plant Life Support</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="preload" href="/static/fonts/inter-latin-var.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/space-grotesk-latin-var.woff2" as="font" type="font/woff2" crossorigin>
   <style>
+    /* Fonts are self-hosted (see static/fonts/README.md) so the kiosk works offline. */
+    @font-face { font-family: "Inter"; font-style: normal; font-weight: 100 900; font-display: swap;
+                 src: url("/static/fonts/inter-latin-var.woff2") format("woff2"); }
+    @font-face { font-family: "Space Grotesk"; font-style: normal; font-weight: 300 700; font-display: swap;
+                 src: url("/static/fonts/space-grotesk-latin-var.woff2") format("woff2"); }
+    @font-face { font-family: "DM Mono"; font-style: normal; font-weight: 400; font-display: swap;
+                 src: url("/static/fonts/dm-mono-latin-400.woff2") format("woff2"); }
+    @font-face { font-family: "DM Mono"; font-style: normal; font-weight: 500; font-display: swap;
+                 src: url("/static/fonts/dm-mono-latin-500.woff2") format("woff2"); }
     /* ══════════════════════════════════════════════════════════════════════
        Design tokens
        Left: the plant (live photo or infrared view) with its status laid
