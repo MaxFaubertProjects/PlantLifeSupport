@@ -145,6 +145,8 @@
     .status-chip.busy::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
     @keyframes pulse { 50% { opacity: .35; } }
     .nar-text { font-family: var(--display); font-size: 54px; line-height: 1; font-weight: 500; letter-spacing: -.035em; }
+    .decision { font-size: 16px; font-weight: 600; color: #fff; margin-top: -4px; }
+    .decision:empty { display: none; }
     .note-text { font-size: 15.5px; line-height: 1.55; color: rgba(255,255,255,.88); max-width: 560px;
                  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
     .note-desc { font-size: 12px; color: rgba(255,255,255,.62); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -499,6 +501,13 @@
     #toast.show { opacity: 1; transform: translate(-50%, 0); }
     @media (max-width: 699px) { #toast { bottom: calc(110px + env(safe-area-inset-bottom)); } }
 
+    /* Kiosk idle mode: after a few minutes without touch, the instruments
+       fade and the photo, headline and next-check line stay. Any touch wakes it. */
+    .side, .stage-top, .note-text, .note-desc, .chips, .th-mini { transition: opacity .8s ease; }
+    body.idle .side { opacity: .12; }
+    body.idle .stage-top, body.idle .note-text, body.idle .note-desc, body.idle .chips, body.idle .th-mini { opacity: 0; }
+    body.idle .nar-text { font-size: 64px; }
+
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
     }
@@ -562,6 +571,7 @@
     <div class="status">
       <span class="status-chip" id="status-chip">—</span>
       <div class="nar-text" id="nar-text">—</div>
+      <div class="decision" id="decision"></div>
       <div class="note-text"><span id="note-text">—</span><span class="fallback-chip" id="note-fallback" style="display:none">fallback</span></div>
       <div class="note-desc" id="note-desc"></div>
       <div class="chips" id="warnings-panel">
@@ -1137,7 +1147,8 @@ function render(status, cycles) {
 
   // ── Names + mode ──
   $('plant-name').textContent = status.plant.name;
-  $('plant-sub').textContent = status.plant.species;
+  const sp = status.plant.species || '';
+  $('plant-sub').textContent = sp.trim().toLowerCase() === (status.plant.name || '').trim().toLowerCase() ? '' : sp;
   document.title = `${status.plant.name} · Plant Life Support`;
   const modeChip = $('mode-chip');
   if (status.mode === 'hardware')    { modeChip.className = 'mode-chip hw'; modeChip.textContent = 'live hardware'; }
@@ -1163,10 +1174,8 @@ function render(status, cycles) {
     chip.className = 'status-chip warn';
     chip.textContent = moistureAlert ? (pct < th.dry_pct ? 'Needs water' : 'Too wet') : tempAlert ? 'Temperature out of range' : 'Light over its daily limit';
   } else {
-    const eta = computeEta();
     chip.className = 'status-chip';
-    chip.textContent = (nWarn ? `${nWarn} thing${nWarn > 1 ? 's' : ''} to watch` : 'All good') +
-      (eta != null ? ` · next check ${hm(Date.now() + eta * 1000)}` : '');
+    chip.textContent = nWarn ? `${nWarn} thing${nWarn > 1 ? 's' : ''} to watch` : 'All good';
   }
 
   if (!timelapse.playing) {
@@ -1342,7 +1351,7 @@ function buildProjection(now, startPct, rates, th) {
   let cross = null;
   for (let h = 0; h <= 24; h += 0.5) {
     const v = Math.max(0, startPct - rate * h);
-    const band = 0.8 + spread * h;
+    const band = Math.min(0.8 + spread * h, 6);   // don't let the band balloon by hour 20
     pts.push({ t: now + h * HOUR, v, lo: Math.max(0, v - band), hi: Math.min(100, v + band * 0.7) });
     if (cross == null && th.dry_pct != null && v < th.dry_pct && startPct >= th.dry_pct) {
       cross = now + ((startPct - th.dry_pct) / rate) * HOUR;
@@ -1377,7 +1386,7 @@ function renderForecast() {
     future = proj.pts; cross = proj.cross;
   }
 
-  drawForecast($('sc-chart'), { now, past, future, th, plannedWater, cross, usingPlan });
+  drawForecast($('sc-chart'), { now, past, future, th, plannedWater, cross, usingPlan, nowPct });
   renderLightStrip(now, cycles, lightPlan, status.light_on);
   $('lg-pred').textContent = usingPlan ? 'Planned' : 'Projected';
 
@@ -1390,7 +1399,7 @@ function renderForecast() {
   renderOutlook({ now, rates, cross, nowPct, th, status, cycles, usingPlan });
 }
 
-function drawForecast(svg, { now, past, future, th, plannedWater, cross, usingPlan }) {
+function drawForecast(svg, { now, past, future, th, plannedWater, cross, usingPlan, nowPct }) {
   const rect = svg.getBoundingClientRect();
   const w = Math.round(rect.width), h = Math.round(rect.height);
   if (w < 60 || h < 60) return;
@@ -1401,6 +1410,7 @@ function drawForecast(svg, { now, past, future, th, plannedWater, cross, usingPl
   const X = t => padL + (t - t0) / (t1 - t0) * cw;
 
   const vals = [...past.map(c => c.soil_pct), ...future.flatMap(f => [f.lo, f.hi])];
+  if (nowPct != null) vals.push(nowPct);
   if (th.dry_pct != null) vals.push(th.dry_pct - 4);
   let lo = vals.length ? Math.min(...vals) : 0, hi = vals.length ? Math.max(...vals) : 100;
   if (hi - lo < 10) { const m = (hi + lo) / 2; lo = m - 5; hi = m + 5; }
@@ -1465,8 +1475,8 @@ function drawForecast(svg, { now, past, future, th, plannedWater, cross, usingPl
   // Now line
   out += `<line x1="${X(now)}" y1="${padT - 6}" x2="${X(now)}" y2="${padT + ch}" stroke="${T.ink}" stroke-width="1.2"/>`;
   out += `<text x="${X(now) + 6}" y="${padT - 6}" fill="${T.ink}" font-size="11" font-weight="600" font-family="Inter, sans-serif">Now</text>`;
-  if (nowPctDot(past, future)) {
-    const v = nowPctDot(past, future);
+  const v = nowPct != null ? nowPct : nowPctDot(past, future);
+  if (v != null) {
     out += `<circle cx="${X(now)}" cy="${Y(v)}" r="9" fill="${T.accent}" opacity=".2"/><circle cx="${X(now)}" cy="${Y(v)}" r="4.5" fill="${T.accent}" stroke="#fff" stroke-width="1.5"/>`;
   }
   svg.innerHTML = out;
@@ -1505,6 +1515,7 @@ function renderLightStrip(now, cycles, lightPlan, lightNow) {
 }
 
 function renderOutlook({ now, rates, cross, nowPct, th, status, cycles, usingPlan }) {
+  renderDecision({ now, cross, nowPct, th, status, usingPlan });
   const list = $('plan-list');
   const rows = [];
   if (usingPlan) {
@@ -1546,6 +1557,27 @@ function renderOutlook({ now, rates, cross, nowPct, th, status, cycles, usingPla
   list.innerHTML = rows.length
     ? rows.map(r => `<div class="p-row"><span class="p-time">${escHtml(r.t)}</span><span class="p-dot" style="background:${r.dot}"></span><span>${escHtml(r.what)} <span class="p-note">${escHtml(r.note)}</span></span></div>`).join('')
     : '<div class="empty-note">Nothing scheduled yet.</div>';
+}
+
+// One line under the headline: when the next check is and what it will likely do.
+function renderDecision({ now, cross, nowPct, th, status, usingPlan }) {
+  const el = $('decision');
+  const stage = status.cycle_state.stage;
+  if (stage && stage !== 'idle') { el.textContent = `Checking now · ${stage}…`; return; }
+  const eta = computeEta();
+  if (eta == null) { el.textContent = ''; return; }
+  const next = now + eta * 1000;
+  const horizon = next + intervalMin * 60e3;           // what this check could act on
+  let likely;
+  if (usingPlan) {
+    const w = (schedule.actions || []).find(a => a.kind === 'water' && new Date(a.at).getTime() <= horizon);
+    likely = w ? `water planned ${hm(w.at)}` : 'no water planned';
+  } else if (nowPct == null || th.dry_pct == null) {
+    likely = '';
+  } else {
+    likely = (nowPct < th.dry_pct || (cross && cross <= next)) ? 'likely water' : 'likely no water';
+  }
+  el.textContent = `Next check ${hm(next)}${likely ? ' · ' + likely : ''}`;
 }
 
 function renderWhyProjection({ rates, cross, nowPct, th, now }) {
@@ -1972,6 +2004,7 @@ async function refreshSensors() {
       const state = moistureState(s.soil_pct, th);
       setMoistureTile(s.soil_pct, state, th, true);
       setNarrative(state, true);
+      renderForecast();   // keep the chart's Now dot and the decision line on the same live value
     }
     if (s.temp_celsius != null) $('tile-temp-big').innerHTML = `${s.temp_celsius.toFixed(1)}<span class="unit">°</span>`;
     if (window.__lastStatus && window.__lastStatus.latest) {
@@ -2226,6 +2259,25 @@ const thermal = {
 };
 $('ir-frame').addEventListener('click', e => thermal.onTap(e));
 new ResizeObserver(() => thermal.placeMarker()).observe($('ir-frame'));
+
+// ── Kiosk idle mode (big landscape screens only; phones and desktops scroll) ──
+const IDLE_MS = 3 * 60e3;
+const kioskMQ = window.matchMedia('(min-width: 1000px) and (min-height: 660px) and (pointer: coarse), (min-width: 1000px) and (min-height: 660px) and (display-mode: fullscreen)');
+let _idleTimer = null;
+function wake(e) {
+  const wasIdle = document.body.classList.contains('idle');
+  document.body.classList.remove('idle');
+  // The first touch on a sleeping screen only wakes it; it doesn't press a button.
+  if (wasIdle && e && e.type === 'pointerdown') { e.preventDefault(); e.stopPropagation(); window.__swallowClick = true; }
+  clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(() => {
+    if (kioskMQ.matches && !cfgOpen && !modal.isOpen && !thermal.ir && !timelapse.playing) document.body.classList.add('idle');
+    else wake();
+  }, IDLE_MS);
+}
+['pointerdown', 'keydown', 'wheel'].forEach(t => window.addEventListener(t, wake, { capture: true, passive: false }));
+window.addEventListener('click', e => { if (window.__swallowClick) { e.preventDefault(); e.stopPropagation(); window.__swallowClick = false; } }, true);
+wake();
 
 // ── Boot ──
 api('GET', '/api/config').then(c => {
