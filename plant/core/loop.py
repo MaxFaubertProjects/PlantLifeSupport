@@ -381,11 +381,34 @@ class ControlLoop:
             last_water_at=self._last_event_water(), ai_reasoning=ai_reasoning, source=source,
         )
         plan["ai_reasoning"] = ai_reasoning
+        if source in ("startup", "settings"):
+            self._sync_light()
         self.plan = plan
         self._save_plan()
         log.info("Plan (%s): %d actions until %s", source,
                  sum(1 for a in plan["actions"] if a["kind"] != "check"), plan["next_check_at"])
         return plan
+
+    def _sync_light(self) -> None:
+        """Put the light where the window says (on start-up / new window).
+
+        A check would otherwise leave it as it was until the next window
+        edge — possibly many hours outside the window.
+        """
+        try:
+            temp = self.hardware.temperature.read()
+        except Exception:
+            temp = None
+        too_cold = float(self.cfg.get("temperature", {}).get("too_cold_celsius", 15.0))
+        want = (sched.light_planned_on(self.cfg, datetime.now(timezone.utc))
+                or (temp is not None and temp.celsius < too_cold))
+        if self.hardware.light.is_on() != want:
+            self.hardware.light.set(want)
+            self.hardware.valve.off()
+            self._db.insert_event("light_on" if want else "light_off", light_on=want,
+                                  source="plan", note="matched to the light window")
+            log.info("Plan: light %s to match the light window", "on" if want else "off")
+        self._model_light_on = want
 
     def run_plan_step(self) -> None:
         """Carry out due actions, and take the half-hourly reading (+ backup)."""

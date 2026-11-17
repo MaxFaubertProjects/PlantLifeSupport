@@ -108,3 +108,10 @@ class TestRunner:
         loop.run_plan_step()
         ev = loop.db.events_since((datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat())
         assert [e for e in ev if e["kind"] == "water" and e["source"] == "backup"]
+
+
+def test_startup_matches_light_window(loop):
+    loop.cfg["schedule"] = {"light_on_at": "00:00", "light_hours": 0}
+    loop.hardware.light.set(True)
+    loop.replan(source="startup")
+    assert not loop.hardware.light.is_on()
