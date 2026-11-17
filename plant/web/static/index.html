@@ -1355,11 +1355,11 @@ function learnRates(cycles) {
   }
   const days = chrono.length > 1 ? (new Date(chrono[chrono.length - 1].ts) - new Date(chrono[0].ts)) / (24 * HOUR) : 0;
   return {
-    rate: dry.length ? Math.max(0.05, median(dry)) : null,
+    rate: dry.length >= 4 ? Math.max(0.05, median(dry)) : null,   // too few gaps = noise
     rateOn: dryOn.length >= 2 ? median(dryOn) : null,
     rateOff: dryOff.length >= 2 ? median(dryOff) : null,
     spread: dry.length >= 4 ? (p95(dry) - median(dry)) : null,
-    gainPerSec: gain.length ? median(gain) : null,
+    gainPerSec: gain.length >= 2 ? median(gain) : null,
     samples: dry.length, days,
   };
 }
@@ -1606,7 +1606,7 @@ function renderWhyProjection({ rates, cross, nowPct, th, now }) {
   const chips = [];
   let text;
   if (rates.rate == null || nowPct == null) {
-    text = 'Not enough readings yet to project moisture. After a few cycles without watering, this shows how fast the soil dries and when it is likely to need water.';
+    text = `Not enough recent readings yet to project moisture (${rates.samples} of 4 dry spells in the last week). After a few more cycles without watering, this shows how fast the soil dries and when it is likely to need water.`;
   } else {
     const span = rates.days >= 1.5 ? `the last ${Math.round(rates.days)} days` : rates.days >= 0.5 ? 'the last day' : 'the last few hours';
     text = `Over ${span} the soil has dried about ${rates.rate.toFixed(1)}% per hour between waterings`;
