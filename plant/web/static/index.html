@@ -245,13 +245,16 @@
     .th-btn .ic { width: 13px; height: 13px; }
     @media (max-width: 599px) {
       .thermal { width: 96px; height: 96px; }
-      .thermal.big img { width: 100%; height: 38%; }
-      .thermal.big .th-panel { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 62%;
-                                display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; }
-      .thermal.big .th-panel > .th-title, .thermal.big .th-panel > .th-note,
-      .thermal.big .th-panel > .th-scale, .thermal.big .th-panel > .th-scale-lbl,
-      .thermal.big .th-panel > #th-stats { grid-column: 1 / -1; }
-      #th-stats { display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px; }
+      .hero:has(.thermal.big) { aspect-ratio: 4 / 5; }
+      .thermal.big img { width: 100%; height: 46%; }
+      .thermal.big .th-panel {
+        top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 52%;
+        display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; align-content: start;
+      }
+      .thermal.big .th-panel > :not(.th-btn) { grid-column: 1 / -1; }
+      .thermal.big .th-panel > .spacer { display: none; }
+      .thermal.big .th-btn { padding: 7px 4px; font-size: 11.5px; }
+      #th-stats { display: grid; grid-template-columns: 1fr 1fr; column-gap: 14px; }
     }
 
     /* Narrative */
