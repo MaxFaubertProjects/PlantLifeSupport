@@ -991,8 +991,8 @@ let lightOn = false;
 let pumpOn = false;
 let etaBase = null;          // {at, sec} — client-side countdown between polls
 let refreshTimer = null;
-let intervalMin = 60;        // loop_interval_minutes, from /api/config
-let minWaterGapMin = 90;     // watering.min_interval_minutes, from /api/config
+let intervalMin = 60;        // loop_interval_minutes, from /api/status
+let minWaterGapMin = 90;     // watering.min_interval_minutes, from /api/status
 const REFRESH_IDLE = 30000;
 const REFRESH_ACTIVE = 2000;
 const REFRESH_LIVE = 5000;
@@ -1113,7 +1113,7 @@ function promptLogin() {
   if (_loginPending) return _loginPending;
   _loginPending = new Promise(resolve => modal.open({
     title: 'Unlock controls',
-    body: 'Enter the control password to make changes. Viewing the dashboard stays open to everyone.',
+    body: 'Enter the control password to change settings or control the plant. Viewing the dashboard stays open to everyone.',
     icon: 'lock', input: true, ok: 'Unlock',
     onOk: async (pw, setErr) => {
       if (!pw) { setErr('Enter the password.'); return false; }
@@ -1183,6 +1183,8 @@ function render(status, cycles) {
   const live = window.__liveSoil;
   const pct = (live && live.pct != null) ? live.pct : (latest ? latest.soil_pct : null);
   const th = status.thresholds || {};
+  if (status.loop_interval_minutes) intervalMin = status.loop_interval_minutes;
+  if (th.min_interval_minutes != null) minWaterGapMin = th.min_interval_minutes;
   const state = moistureState(pct, th);
   const soilConnected = !status.sensors || status.sensors.soil !== false;
   const stage = status.cycle_state.stage;
@@ -1765,7 +1767,14 @@ let promptDefaults = { vision: '', reasoning_system: '' };
 let cfgOpen = false;
 let activeTab = 'schedule';
 
-function openCfg() { cfgOpen = true; $('cfg-overlay').classList.remove('hidden'); loadCfg(); switchTab(activeTab); }
+// Settings are password-gated like the controls: unlock first, then open.
+async function openCfg() {
+  try {
+    const a = await fetch('/api/auth').then(r => r.json());
+    if (a.required && !a.authed && !(await promptLogin())) return;
+  } catch (_) { return; }
+  cfgOpen = true; $('cfg-overlay').classList.remove('hidden'); loadCfg(); switchTab(activeTab);
+}
 function closeCfg() { cfgOpen = false; $('cfg-overlay').classList.add('hidden'); stopDebugPolling(); }
 
 document.addEventListener('keydown', e => {
@@ -2484,10 +2493,6 @@ window.addEventListener('click', e => { if (window.__swallowClick) { e.preventDe
 wake();
 
 // ── Boot ──
-api('GET', '/api/config').then(c => {
-  intervalMin = c.loop_interval_minutes || 60;
-  minWaterGapMin = c.watering?.min_interval_minutes ?? 90;
-}).catch(() => {});
 refresh();
 refreshSnapshot();
 refreshSensors();

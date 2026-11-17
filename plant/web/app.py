@@ -498,6 +498,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             "cycle_state": cycle_state,
             "plant": plant,
             "thresholds": thresholds,
+            "loop_interval_minutes": cfg.get("loop_interval_minutes", 60),
             "sensors": sensors,
             "live": _live_info(),
             "photo_view": _photo_view(cfg),
@@ -619,8 +620,8 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     # ── API: config read/write ────────────────────────────────────────────────
 
     @app.get("/api/config")
-    async def get_config() -> dict[str, Any]:
-        """Return the current editable configuration."""
+    async def get_config(_=Depends(require_control)) -> dict[str, Any]:
+        """Return the current editable configuration (Settings — password-gated)."""
         plant = cfg.get("plant", {})
         soil = cfg.get("soil", {})
         temp = cfg.get("temperature", {})
@@ -772,7 +773,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     # ── API: prompt read/write ────────────────────────────────────────────────
 
     @app.get("/api/prompts")
-    async def get_prompts() -> dict[str, Any]:
+    async def get_prompts(_=Depends(require_control)) -> dict[str, Any]:
         """Return the active prompts and their factory defaults."""
         from plant.ai.prompts import (
             get_vision_prompt, get_reasoning_system,
