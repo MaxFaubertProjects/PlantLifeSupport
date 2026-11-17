@@ -256,8 +256,28 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
     stream_fps = float(web_cfg.get("stream_fps", 4))
     thermal_fps = float(web_cfg.get("thermal_stream_fps", 4))
 
+    stream_min_free_mb = float(web_cfg.get("stream_min_free_mb", 1200))
+
     def loop_idle() -> bool:
         return control_loop.cycle_state.get("stage") in (None, "idle")
+
+    def _mem_available_mb() -> Optional[float]:
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) / 1024
+        except OSError:
+            return None        # not Linux (simulation on a Mac): no guard
+        return None
+
+    def streaming_ok() -> bool:
+        """Idle loop AND enough free RAM. After a cycle Ollama keeps the model
+        loaded for a few minutes; don't add camera buffers on top of that."""
+        if not loop_idle():
+            return False
+        free = _mem_available_mb()
+        return free is None or free >= stream_min_free_mb
 
     _NO_CACHE = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                  "Pragma": "no-cache", "X-Accel-Buffering": "no"}
@@ -279,13 +299,15 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         return polling_source(lambda: cam.read(max_age=0), thermal_fps)
 
     _cam_src, _th_src = _camera_source(), _thermal_source()
-    camera_feed = LiveFeed("camera", _cam_src, loop_idle) if _cam_src else None
-    thermal_feed = LiveFeed("thermal", _th_src, loop_idle) if _th_src else None
+    camera_feed = LiveFeed("camera", _cam_src, streaming_ok) if _cam_src else None
+    thermal_feed = LiveFeed("thermal", _th_src, streaming_ok) if _th_src else None
 
     def _live_info() -> dict[str, Any]:
         th = getattr(hardware, "thermal", None)
         return {
-            "idle": loop_idle(),
+            "idle": streaming_ok(),
+            "loop_idle": loop_idle(),
+            "mem_available_mb": _mem_available_mb(),
             "camera": camera_feed is not None and getattr(hardware.camera, "available", True),
             "thermal": thermal_feed is not None and bool(getattr(th, "available", False)),
             "camera_viewers": camera_feed.viewers if camera_feed else 0,
@@ -301,8 +323,8 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         """MJPEG live view of the plant camera (multipart/x-mixed-replace)."""
         if camera_feed is None:
             raise HTTPException(status_code=501, detail="live video not supported")
-        if not loop_idle():
-            raise HTTPException(status_code=503, detail="a cycle is running — live video paused")
+        if not streaming_ok():
+            raise HTTPException(status_code=503, detail="live video paused (cycle running or the Pi is short of memory)")
 
         async def parts():
             async for jpeg in camera_feed.frames(request.is_disconnected, max_fps=stream_fps * 2):
@@ -318,8 +340,8 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
         cam = getattr(hardware, "thermal", None)
         if thermal_feed is None or cam is None or not cam.available:
             raise HTTPException(status_code=503, detail="thermal camera not connected")
-        if not loop_idle():
-            raise HTTPException(status_code=503, detail="a cycle is running — live video paused")
+        if not streaming_ok():
+            raise HTTPException(status_code=503, detail="live video paused (cycle running or the Pi is short of memory)")
 
         async def events():
             yield "retry: 15000\n\n"

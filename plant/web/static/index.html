@@ -1224,7 +1224,7 @@ function render(status, cycles) {
   if (!timelapse.playing) {
     const lv = status.live;
     $('hero-time').textContent = liveVideo.cam ? 'Live video'
-      : (lv && !lv.idle) ? 'Video paused · cycle running'
+      : (lv && !lv.idle) ? (lv.loop_idle ? 'Video paused · Pi busy' : 'Video paused · cycle running')
       : latest ? `Live · ${hm(latest.ts)}` : 'Live';
     $('hero-cid').textContent = !liveVideo.cam && latest ? `#${latest.id}` : '';
   }
