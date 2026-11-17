@@ -85,6 +85,14 @@ class PromptsUpdateRequest(BaseModel):
     reasoning_system: Optional[str] = None
 
 
+class PhotoView(BaseModel):
+    # How the dashboard frames the camera photo: zoom 1 shows the whole
+    # frame; above 1 it crops around (x, y), percentages of the frame.
+    zoom: float = 1.0
+    x: float = 50.0
+    y: float = 50.0
+
+
 class ConfigUpdateRequest(BaseModel):
     loop_interval_minutes: Optional[int] = None
     plant: Optional[PlantConfigSection] = None
@@ -93,6 +101,15 @@ class ConfigUpdateRequest(BaseModel):
     watering: Optional[WateringRanges] = None
     light: Optional[LightRanges] = None
     ai: Optional[AISettings] = None
+    photo_view: Optional[PhotoView] = None
+
+
+def _photo_view(cfg: dict) -> dict[str, float]:
+    v = (cfg.get("web") or {}).get("photo_view") or {}
+    clamp = lambda x, lo, hi, d: max(lo, min(hi, float(x if x is not None else d)))  # noqa: E731
+    return {"zoom": clamp(v.get("zoom"), 1.0, 4.0, 1.0),
+            "x": clamp(v.get("x"), 0.0, 100.0, 50.0),
+            "y": clamp(v.get("y"), 0.0, 100.0, 50.0)}
 
 
 def _adc_to_pct(adc: int, cal_dry: int = 1023, cal_wet: int = 0) -> float:
@@ -461,6 +478,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             "thresholds": thresholds,
             "sensors": sensors,
             "live": _live_info(),
+            "photo_view": _photo_view(cfg),
         }
 
     # ── API: cycles (for charts + reasoning log) ──────────────────────────────
@@ -620,6 +638,7 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
                 "timeout_seconds": cfg.get("ai", {}).get("timeout_seconds", 1000),
                 "temperature":     cfg.get("ai", {}).get("temperature", 0.2),
             },
+            "photo_view": _photo_view(cfg),
         }
 
     @app.post("/api/config")
@@ -680,6 +699,12 @@ def create_app(cfg: dict, hardware, control_loop) -> FastAPI:
             if req.ai.temperature is not None:
                 ai["temperature"] = req.ai.temperature
                 log.info("Config: ai.temperature → %.2f", req.ai.temperature)
+
+        if req.photo_view is not None:
+            web = cfg.setdefault("web", {})
+            web["photo_view"] = req.photo_view.model_dump()
+            web["photo_view"] = _photo_view(cfg)
+            log.info("Config: photo_view → %s", web["photo_view"])
 
         config_path = cfg.get("_config_path")
         if config_path:

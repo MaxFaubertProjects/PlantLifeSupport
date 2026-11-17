@@ -432,6 +432,15 @@
     .ai-temp-slider { flex: 1; max-width: 340px; accent-color: var(--accent); cursor: pointer; }
     .ai-temp-val { font: 500 15px var(--display); color: var(--ink); min-width: 40px; }
 
+    .frame-prev { position: relative; width: 100%; max-width: 520px; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden;
+                  background: #0b0d0c; cursor: crosshair; margin-bottom: 14px; touch-action: none; }
+    .frame-prev img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; display: block; user-select: none; -webkit-user-drag: none; }
+    .frame-box { position: absolute; border: 2px solid #fff; border-radius: 6px; box-shadow: 0 0 0 999px rgba(8,10,9,.5); pointer-events: none;
+                 transition: left .12s, top .12s, width .12s, height .12s; }
+    .range-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 56px; gap: 12px; align-items: center; margin-bottom: 12px; max-width: 520px; }
+    .range-row label { font-size: 13px; color: var(--ink-2); }
+    .range-row input { accent-color: var(--accent); width: 100%; }
+    .range-row output { font: 500 13px var(--display); text-align: right; }
     .instrument { background: var(--rail); color: var(--rail-ink); border-radius: var(--r-md); padding: 18px 20px; margin-bottom: 14px; }
     .instrument-title { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 600; }
     .instrument-title small { font-weight: 400; color: var(--rail-muted); }
@@ -889,6 +898,21 @@
         <div class="cfg-section">
           <h2 class="cfg-h">Sensors</h2>
           <p class="cfg-lede">Live readings straight from the hardware, refreshed every second while this tab is open. Use them to check wiring and calibrate the probes.</p>
+          <div class="cfg-group" id="framing-group">
+            <div class="cfg-group-title"><svg class="ic"><use href="#i-target"/></svg>Photo framing</div>
+            <p class="cfg-hint" style="margin:-6px 0 12px">Zoom in, then move the box over the plant (or tap the picture where the plant is). Every screen showing the dashboard uses this framing; the AI still sees the whole photo.</p>
+            <div class="frame-prev" id="frame-prev" role="img" aria-label="Whole camera frame. Tap to centre the crop there.">
+              <img id="frame-prev-img" alt="" draggable="false">
+              <div class="frame-box" id="frame-box"></div>
+            </div>
+            <div class="range-row"><label for="pv-zoom">Zoom</label><input id="pv-zoom" type="range" min="1" max="4" step="0.05" oninput="framing.fromInputs()"><output id="pv-zoom-v">1.0×</output></div>
+            <div class="range-row"><label for="pv-y">Up / down</label><input id="pv-y" type="range" min="0" max="100" step="1" oninput="framing.fromInputs()"><output id="pv-y-v">50%</output></div>
+            <div class="range-row"><label for="pv-x">Left / right</label><input id="pv-x" type="range" min="0" max="100" step="1" oninput="framing.fromInputs()"><output id="pv-x-v">50%</output></div>
+            <div class="cfg-actions" style="margin-bottom:16px">
+              <button class="cfg-save" onclick="framing.save()">Save framing</button>
+              <button class="btn-ghost" onclick="framing.reset()">Show whole frame</button>
+            </div>
+          </div>
           <div class="instrument" id="dbg-panel">
             <div class="instrument-title"><span class="led" id="dbg-led"></span>Soil probe <small>· capacitive via MCP3008, raw ADC</small></div>
             <div class="readouts">
@@ -1263,6 +1287,9 @@ function render(status, cycles) {
   cycleBtn.querySelector('.softbtn-label').textContent = active ? 'Cycle running…' : 'Run cycle now';
 
   updateLoadingBar(stage);
+  if (status.photo_view && JSON.stringify(status.photo_view) !== JSON.stringify(photoView)) {
+    photoView = status.photo_view; applyStageView();
+  }
   liveVideo.update();
   return active || pumpOn;
 }
@@ -1757,7 +1784,7 @@ function switchTab(name) {
   document.querySelector('.cfg-body').scrollTop = 0;
   if (name === 'history') renderHistory();
   if (name === 'prompt')  renderPromptTab();
-  if (name === 'sensors') startDebugPolling(); else stopDebugPolling();
+  if (name === 'sensors') { startDebugPolling(); framing.open(); } else stopDebugPolling();
 }
 
 let _dbgTimer = null;
@@ -2362,6 +2389,80 @@ const liveVideo = {
   },
 };
 document.addEventListener('visibilitychange', () => liveVideo.update());
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Photo framing. view = {zoom, x, y}: zoom 1 shows the whole camera frame;
+// above 1 the photo is cropped to a 1/zoom window centred near (x%, y%) of
+// the frame and scaled up to fill the space the whole frame occupied.
+// Done with a transform + clip-path, so it works for stills, timelapse
+// frames and the live MJPEG stream alike.
+// ─────────────────────────────────────────────────────────────────────────────
+let photoView = { zoom: 1, x: 50, y: 50 };
+
+function cropWindow(v) {
+  const f = 1 / Math.max(1, v.zoom);
+  const clamp = (c) => Math.max(0, Math.min(1 - f, c / 100 - f / 2));
+  return { f, u: clamp(v.x), t: clamp(v.y) };
+}
+
+function applyPhotoView(img, v) {
+  const cw = img.clientWidth, ch = img.clientHeight, iw = img.naturalWidth, ih = img.naturalHeight;
+  if (!v || v.zoom <= 1.001 || !iw || !ih || !cw || !ch) {
+    img.style.transform = ''; img.style.clipPath = ''; return;
+  }
+  const sc = Math.min(cw / iw, ch / ih), w = iw * sc, h = ih * sc;
+  const pos = getComputedStyle(img).objectPosition.split(' ').map(p => parseFloat(p) / 100);
+  const x0 = (cw - w) * (isNaN(pos[0]) ? .5 : pos[0]), y0 = (ch - h) * (isNaN(pos[1]) ? .5 : pos[1]);
+  const { f, u, t } = cropWindow(v), z = 1 / f;
+  const cx0 = x0 + u * w, cy0 = y0 + t * h;
+  img.style.transformOrigin = '0 0';
+  img.style.transform = `translate(${(x0 - z * cx0).toFixed(1)}px, ${(y0 - z * cy0).toFixed(1)}px) scale(${z.toFixed(3)})`;
+  img.style.clipPath = `inset(${cy0.toFixed(1)}px ${(cw - cx0 - w * f).toFixed(1)}px ${(ch - cy0 - h * f).toFixed(1)}px ${cx0.toFixed(1)}px)`;
+}
+function applyStageView() { ['hero-img', 'hero-img-b'].forEach(id => applyPhotoView($(id), photoView)); }
+['hero-img', 'hero-img-b'].forEach(id => $(id).addEventListener('load', applyStageView));
+new ResizeObserver(applyStageView).observe($('stage'));
+setInterval(applyStageView, 2000);      // MJPEG frames don't reliably fire 'load'
+
+const framing = {
+  draft: null,
+  open() {
+    this.draft = { ...photoView };
+    $('frame-prev-img').src = `/api/snapshot.jpg?t=${Date.now()}`;   // the live frame if video is running
+    this.toInputs();
+  },
+  toInputs() {
+    const d = this.draft;
+    $('pv-zoom').value = d.zoom; $('pv-x').value = d.x; $('pv-y').value = d.y;
+    $('pv-zoom-v').textContent = `${(+d.zoom).toFixed(1)}×`;
+    $('pv-x-v').textContent = `${Math.round(d.x)}%`; $('pv-y-v').textContent = `${Math.round(d.y)}%`;
+    const { f, u, t } = cropWindow(d), box = $('frame-box');
+    box.style.left = `${u * 100}%`; box.style.top = `${t * 100}%`;
+    box.style.width = `${f * 100}%`; box.style.height = `${f * 100}%`;
+    ['pv-x', 'pv-y'].forEach(id => { $(id).disabled = d.zoom <= 1.001; });
+  },
+  fromInputs() {
+    this.draft = { zoom: parseFloat($('pv-zoom').value), x: parseFloat($('pv-x').value), y: parseFloat($('pv-y').value) };
+    this.toInputs();
+  },
+  tap(e) {
+    const r = $('frame-prev').getBoundingClientRect();
+    this.draft.x = Math.round(Math.max(0, Math.min(100, (e.clientX - r.left) / r.width * 100)));
+    this.draft.y = Math.round(Math.max(0, Math.min(100, (e.clientY - r.top) / r.height * 100)));
+    if (this.draft.zoom <= 1.001) this.draft.zoom = 1.6;   // tapping means "frame this": zoom in a bit
+    this.toInputs();
+  },
+  async save() {
+    try {
+      await api('POST', '/api/config', { photo_view: this.draft });
+      photoView = { ...this.draft };
+      applyStageView();
+      toast('Framing saved');
+    } catch (e) { toast('Error: ' + e.message); }
+  },
+  reset() { this.draft = { zoom: 1, x: 50, y: 50 }; this.toInputs(); },
+};
+$('frame-prev').addEventListener('click', e => framing.tap(e));
 
 // ── Kiosk idle mode (big landscape screens only; phones and desktops scroll) ──
 const IDLE_MS = 3 * 60e3;
